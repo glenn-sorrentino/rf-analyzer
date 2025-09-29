@@ -1,18 +1,13 @@
 services:
   openwebrx:
-    image: jketterl/openwebrx:latest
-    container_name: openwebrx
+    image: jketterl/openwebrx-hackrf:latest
+    privileged: true
     restart: unless-stopped
-    ports:
-      - "8073:8073"
-    environment:
-      - OW_HOST=0.0.0.0
-      - OW_PORT=8073
-    volumes:
-      - ./openwebrx_data:/var/lib/openwebrx
-      - ./openwebrx_cfg:/etc/openwebrx
+    network_mode: host
     devices:
       - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - ./openwebrx_data:/var/lib/openwebrx
 
   hackrf-sweep:
     build:
