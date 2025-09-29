@@ -10,18 +10,29 @@ services:
     volumes:
       - ./openwebrx_cfg:/config
       - ./openwebrx_data:/var/lib/openwebrx
+    environment:
+      - CFG=/config/hackrf.json
+      - HOST=0.0.0.0
+      - PORT=8073
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8073 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   hackrf-sweep:
     image: debian:stable-slim
+    profiles: ["sweep"]         # only starts if COMPOSE_PROFILES=sweep
     privileged: true
     network_mode: host
     restart: unless-stopped
     devices:
       - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - ./sweep_logs:/var/log/hackrf
     command: >
       bash -lc "apt-get update &&
                 apt-get install -y --no-install-recommends hackrf &&
                 mkdir -p /var/log/hackrf &&
-                exec hackrf_sweep -f 1:6000 -w 10000000 -r /var/log/hackrf/hackrf_sweep.csv"
-    volumes:
-      - ./sweep_logs:/var/log/hackrf
+                exec hackrf_sweep -f 1:6000 -w 10000000
+                -r /var/log/hackrf/hackrf_sweep.csv"
