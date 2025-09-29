@@ -1,11 +1,14 @@
 services:
   openwebrx:
-    image: jketterl/openwebrx-full:latest
+    image: slechev/openwebrxplus:latest
     container_name: openwebrx
     devices:
       - /dev/bus/usb:/dev/bus/usb
     ports:
       - "8073:8073"
+    environment:
+      OPENWEBRX_ADMIN_USER: admin
+      OPENWEBRX_ADMIN_PASSWORD: STRONG_PASSWORD
     volumes:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
