@@ -1,23 +1,19 @@
 services:
   openwebrx:
-    build:
-      context: ./openwebrx
+    image: jketterl/openwebrx-hackrf:latest
     privileged: true
     network_mode: host
     restart: unless-stopped
     devices:
       - /dev/bus/usb:/dev/bus/usb
     volumes:
-      - ./openwebrx_cfg:/config
+      - ./openwebrx_cfg:/etc/openwebrx
       - ./openwebrx_data:/var/lib/openwebrx
-    environment:
-      - CFG=/config/hackrf.json
-      - HOST=0.0.0.0
-      - PORT=8073
 
+  # optional; DO NOT run at the same time as OpenWebRX
   hackrf-sweep:
     image: debian:stable-slim
-    profiles: ["sweep"]   # WILL NOT START unless COMPOSE_PROFILES=sweep
+    profiles: ["sweep"]    # only starts if COMPOSE_PROFILES=sweep
     privileged: true
     network_mode: host
     restart: unless-stopped
