@@ -1,7 +1,6 @@
 services:
   openwebrx:
     image: jketterl/openwebrx-hackrf:latest
-    container_name: openwebrx
     user: "0:0"
     privileged: true
     devices:
@@ -10,7 +9,7 @@ services:
       - "8073:8073"
     volumes:
       - ./openwebrx_cfg:/etc/openwebrx
-      - ./openwebrx_data:/var/lib/openwebrx
+      - ./openwebrx_data:/opt/openwebrx/data
     restart: unless-stopped
 
   # optional; DO NOT run at the same time as OpenWebRX
