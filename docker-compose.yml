@@ -1,13 +1,14 @@
 services:
   openwebrx:
-    image: jketterl/openwebrx-hackrf:latest
+    build:
+      context: ./openwebrx
     privileged: true
     network_mode: host
     restart: unless-stopped
     devices:
       - /dev/bus/usb:/dev/bus/usb
     volumes:
-      - ./openwebrx_cfg:/etc/openwebrx
+      - ./openwebrx_cfg:/config
       - ./openwebrx_data:/var/lib/openwebrx
 
   hackrf-sweep:
