@@ -3,7 +3,4 @@ set -euo pipefail
 CFG="${CFG:-/config/hackrf.json}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8073}"
-hackrf_info || true
-soapy_sdr_util --find || true
-exec /app/.venv/bin/python /app/openwebrx.py \
-  --receiver-config "${CFG}" --host "${HOST}" --port "${PORT}"
+/venv/bin/python /app/openwebrx.py --receiver-config "$CFG" --host "$HOST" --port "$PORT"
