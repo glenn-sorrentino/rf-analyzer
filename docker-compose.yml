@@ -2,18 +2,20 @@ services:
   openwebrx:
     image: jketterl/openwebrx-hackrf:latest
     container_name: openwebrx
+    privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
     ports:
       - "8073:8073"
     volumes:
+      - ./openwebrx_cfg:/etc/openwebrx
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
 
   # optional; DO NOT run at the same time as OpenWebRX
   hackrf-sweep:
     image: debian:stable-slim
-    profiles: ["sweep"]    # only starts if COMPOSE_PROFILES=sweep
+    profiles: ["sweep"]
     privileged: true
     network_mode: host
     restart: unless-stopped
@@ -25,5 +27,4 @@ services:
       bash -lc "apt-get update &&
                 apt-get install -y --no-install-recommends hackrf &&
                 mkdir -p /var/log/hackrf &&
-                exec hackrf_sweep -f 1:6000 -w 10000000
-                -r /var/log/hackrf/hackrf_sweep.csv"
+                exec hackrf_sweep -f 1:6000 -w 10000000 -r /var/log/hackrf/hackrf_sweep.csv"
