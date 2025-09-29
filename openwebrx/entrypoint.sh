@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 CFG="${CFG:-/config/hackrf.json}"
-PORT="${PORT:-8073}"
 HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8073}"
 
-# Sanity: HackRF visible
-hackrf_info >/dev/null 2>&1 || {
-  echo "HackRF not detected. Ensure USB is passed through: devices: - /dev/bus/usb:/dev/bus/usb" >&2
-}
+hackrf_info >/dev/null || echo "WARN: HackRF not visible"
 
-# Run OpenWebRX
 exec /app/.venv/bin/python /app/openwebrx.py \
   --receiver-config "${CFG}" \
-  --host "${HOST}" \
-  --port "${PORT}"
+  --host "${HOST}" --port "${PORT}"

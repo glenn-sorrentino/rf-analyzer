@@ -1,25 +1,27 @@
 services:
   openwebrx:
-    image: jketterl/openwebrx-hackrf:latest
+    build:
+      context: ./openwebrx
     privileged: true
-    restart: unless-stopped
     network_mode: host
+    restart: unless-stopped
     devices:
       - /dev/bus/usb:/dev/bus/usb
     volumes:
+      - ./openwebrx_cfg:/config
       - ./openwebrx_data:/var/lib/openwebrx
 
   hackrf-sweep:
-    build:
-      context: ./hackrf-sweep
-      dockerfile: Dockerfile
-    container_name: hackrf-sweep
+    image: debian:stable-slim
+    privileged: true
+    network_mode: host
     restart: unless-stopped
-    command: >
-      bash -lc "mkdir -p /var/log/hackrf &&
-                exec hackrf_sweep -f 1:6000 -w 10000000
-                -r /var/log/hackrf/hackrf_sweep.csv"
-    volumes:
-      - ./sweep_logs:/var/log/hackrf
     devices:
       - /dev/bus/usb:/dev/bus/usb
+    command: >
+      bash -lc "apt-get update &&
+                apt-get install -y --no-install-recommends hackrf &&
+                mkdir -p /var/log/hackrf &&
+                exec hackrf_sweep -f 1:6000 -w 10000000 -r /var/log/hackrf/hackrf_sweep.csv"
+    volumes:
+      - ./sweep_logs:/var/log/hackrf
