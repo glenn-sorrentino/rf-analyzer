@@ -14,15 +14,10 @@ services:
       - CFG=/config/hackrf.json
       - HOST=0.0.0.0
       - PORT=8073
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8073 >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
 
   hackrf-sweep:
     image: debian:stable-slim
-    profiles: ["sweep"]         # only starts if COMPOSE_PROFILES=sweep
+    profiles: ["sweep"]   # WILL NOT START unless COMPOSE_PROFILES=sweep
     privileged: true
     network_mode: host
     restart: unless-stopped
