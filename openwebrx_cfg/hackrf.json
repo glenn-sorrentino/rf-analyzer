@@ -1,0 +1,22 @@
+{
+  "name": "HackRF Pi4",
+  "driver": "soapy",
+  "device": "driver=hackrf",
+  "samp_rate": 8000000,
+  "center_freq": 100000000,
+  "rf_gain": 20,
+  "if_gain": 16,
+  "bb_gain": 16,
+  "ppm": 0,
+  "start_rtl_thread": false,
+  "start_syslog": false,
+  "fft_size": 4096,
+  "fft_fps": 15,
+  "fft_voverlap_factor": 0.5,
+  "fft_auto": false,
+  "fft_avg": 0.6,
+  "waterfall_max_points": 2048,
+  "spectrum_history": 240,
+  "digimodes": [],
+  "allow_remote_admin": false
+}

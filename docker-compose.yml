@@ -1,0 +1,30 @@
+services:
+  openwebrx:
+    image: jketterl/openwebrx:latest
+    container_name: openwebrx
+    restart: unless-stopped
+    ports:
+      - "8073:8073"
+    environment:
+      - OW_HOST=0.0.0.0
+      - OW_PORT=8073
+    volumes:
+      - ./openwebrx_data:/var/lib/openwebrx
+      - ./openwebrx_cfg:/etc/openwebrx
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+
+  hackrf-sweep:
+    build:
+      context: ./hackrf-sweep
+      dockerfile: Dockerfile
+    container_name: hackrf-sweep
+    restart: unless-stopped
+    command: >
+      bash -lc "mkdir -p /var/log/hackrf &&
+                exec hackrf_sweep -f 1:6000 -w 10000000
+                -r /var/log/hackrf/hackrf_sweep.csv"
+    volumes:
+      - ./sweep_logs:/var/log/hackrf
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
