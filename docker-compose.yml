@@ -27,8 +27,8 @@ services:
           RATE=8000000
           DURATION=120
           THRESHOLD_DB=-45
-          BAND_LOW=1600000000
-          BAND_HIGH=1700000000
+          BAND_LOW=1600
+          BAND_HIGH=1700
           LNA=32; VGA=24; AMP=1; BBW=10000000
 
           while true; do
