@@ -4,8 +4,8 @@ services:
     container_name: openwebrx
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    ports:
-      - "8073:8073"
+    # ports:                      # optional: disable if only using https via nginx
+    #   - "8073:8073"
     environment:
       OPENWEBRX_ADMIN_USER: admin
       OPENWEBRX_ADMIN_PASSWORD: STRONG_PASSWORD
@@ -31,26 +31,14 @@ services:
                 exec hackrf_sweep -f 1:6000 -w 10000000 -r /var/log/hackrf/hackrf_sweep.csv"
 
   nginx:
-      image: nginx:alpine
-      ports:
-        - "443:443"
-      volumes:
-        - ./certs:/etc/nginx/certs:ro
-      depends_on:
-        - openwebrx
-      command: >
-        sh -c "cat <<EOF > /etc/nginx/conf.d/default.conf
-        server {
-          listen 443 ssl;
-          server_name rf.local;
-
-          ssl_certificate /etc/nginx/certs/rf.local+2.pem;
-          ssl_certificate_key /etc/nginx/certs/rf.local+2-key.pem;
-
-          location / {
-            proxy_pass http://openwebrx:8073;
-            proxy_set_header Host \$\$host;
-            proxy_set_header X-Real-IP \$\$remote_addr;
-          }
-        }
-        EOF && nginx -g 'daemon off;'"
+    image: nginx:alpine
+    ports:
+      - "443:443"
+      # (optional) redirect 80->443:
+      # - "80:80"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - openwebrx
+    restart: unless-stopped
