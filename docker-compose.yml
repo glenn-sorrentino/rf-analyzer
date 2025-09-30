@@ -70,13 +70,3 @@ services:
           find /mnt/iqdata/watch -type f -name 'trigger_*.iq' -printf '%T+ %p\\n' | sort | head -n -$${N_KEEP} | cut -d' ' -f2- | xargs -r rm -f;
         done
       "
-
-  hackrf-watch:
-    build:
-      context: .
-      dockerfile: Dockerfile.watch
-    volumes:
-      - /mnt/iqdata/sweeps:/mnt/iqdata/sweeps
-    depends_on:
-      - hackrf-manager
-    restart: unless-stopped
