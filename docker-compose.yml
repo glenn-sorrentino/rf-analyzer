@@ -51,7 +51,8 @@ services:
             }' "$$raw" > "$$lite" || true
 
             best_line=$$(awk -F', *' -v lo=$${BAND_LOW} -v hi=$${BAND_HIGH} \
-              '($$2>=lo && $$3<=hi){ printf "%.0f %.2f\n", $$6, $$7 }' "$$lite" \
+              '{ low=$$2*1e6; high=$$3*1e6;
+                if(low>=lo && high<=hi) printf "%.0f %.2f\n", $$6, $$7 }' "$$lite" \
               | sort -k2,2nr | head -n1)
 
             [ -z "$$best_line" ] && { echo "DEBUG: none-in-band; skipping"; continue; }
