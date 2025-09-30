@@ -4,16 +4,39 @@ services:
     container_name: openwebrx
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    # ports:                      # optional: disable if only using https via nginx
-    #   - "8073:8073"
     environment:
       OPENWEBRX_ADMIN_USER: admin
       OPENWEBRX_ADMIN_PASSWORD: STRONG_PASSWORD
     volumes:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
+    profiles: ["ui"]
 
-  # optional; DO NOT run at the same time as OpenWebRX
+  recorder:
+    image: debian:stable-slim
+    container_name: iqrecorder
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - /mnt/iqdata:/data
+    command: >
+      bash -lc "
+        set -euo pipefail;
+        apt-get update >/dev/null &&
+        apt-get install -y --no-install-recommends hackrf coreutils >/dev/null;
+        rate=8000000;
+        while true; do
+          ts=$(date -u +%Y%m%dT%H%M%SZ);
+          out=/data/rec_${ts}.iq;
+          echo Recording $out;
+          hackrf_transfer -r - -f 1601000000 -s $rate -a 1 -l 32 -g 24 -b 10000000 -n $((rate*2*60)) > $out;
+          find /data -type f -name '*.iq' -printf '%T+ %p\n' \
+            | sort | head -n -1440 | cut -d' ' -f2- | xargs -r rm -f;
+        done
+      "
+    restart: unless-stopped
+    profiles: ["record"]
+
   hackrf-sweep:
     image: debian:stable-slim
     profiles: ["sweep"]
@@ -42,3 +65,4 @@ services:
     depends_on:
       - openwebrx
     restart: unless-stopped
+    profiles: ["ui"]
