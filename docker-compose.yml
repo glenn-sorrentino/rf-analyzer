@@ -1,7 +1,7 @@
 services:
   hackrf-manager:
     image: debian:stable-slim
-    profiles: ["sweep"]
+    profiles: ["sweep"]        # start with: docker compose -f docker-compose.yml --profile sweep up -d
     privileged: true
     network_mode: host
     restart: unless-stopped
@@ -16,60 +16,61 @@ services:
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
 
+          # one-time deps
           apt-get update -qq
           apt-get install -y --no-install-recommends -qq hackrf coreutils gawk
           mkdir -p /mnt/iqdata/sweeps /mnt/iqdata/watch
 
-          # --- tunables ---
-          N_KEEP=20160
-          BIN_WIDTH=100000
-          SWEEP_SEC=60
-          RATE=8000000
-          DURATION=120
-          THRESHOLD_DB=-45
-          BAND_LOW=1600000000
-          BAND_HIGH=1700000000
+          # --- tunables (edit these) ---
+          N_KEEP=20160               # keep ~14 days of minute files
+          BIN_WIDTH=100000           # 100 kHz bins
+          SWEEP_SEC=60               # each sweep run time (seconds)
+          RATE=8000000               # 8 Msps for IQ capture
+          DURATION=120               # seconds to capture on trigger (2 minutes)
+          THRESHOLD_DB=-45           # trigger threshold (higher/more positive = stricter)
+          BAND_LOW=1600000000        # 1.6 GHz
+          BAND_HIGH=1700000000       # 1.7 GHz
           LNA=32; VGA=24; AMP=1; BBW=10000000
 
           while true; do
-            ts=$(date -u +%Y%m%dT%H%M%SZ)
-            raw=/mnt/iqdata/sweeps/sweep_${ts}.csv
-            lite=/mnt/iqdata/sweeps/sweep_${ts}_lite.csv
+            ts=$$(date -u +%Y%m%dT%H%M%SZ)
+            raw=/mnt/iqdata/sweeps/sweep_$${ts}.csv
+            lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv
 
-            echo ">> sweep ${ts}"
-            timeout ${SWEEP_SEC} hackrf_sweep -f 1:6000 -w ${BIN_WIDTH} -a ${AMP} -l ${LNA} -g ${VGA} -r "${raw}" || true
+            echo ">> sweep $${ts}"
+            timeout $${SWEEP_SEC} hackrf_sweep -f 1:6000 -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} -r "$${raw}" || true
 
-            # Summarize each 5 MHz slice
+            # Summarize each 5 MHz slice -> ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
             awk -F', *' '{
-              low=$3+0; high=$4+0; bw=$5+0;
+              low=$$3+0; high=$$4+0; bw=$$5+0;
               max=-1e9; idx=-1; sum=0; cnt=0;
-              for(i=7;i<=NF;i++){v=$i+0; sum+=v; cnt++; if(v>max){max=v; idx=i-7}}
+              for(i=7;i<=NF;i++){ v=$$i+0; sum+=v; cnt++; if(v>max){ max=v; idx=i-7 } }
               if(cnt>0){
-                peak_hz=low + (idx+0.5)*bw; mean=sum/cnt;
-                printf "%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\n", $1, $2, low, high, bw, cnt, peak_hz, max, mean;
+                peak_hz = low + (idx+0.5)*bw;
+                mean = sum/cnt;
+                printf "%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\n", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
               }
-            }' "${raw}" > "${lite}" || true
+            }' "$${raw}" > "$${lite}" || true
 
-            # Strongest slice inside watch band
-            best_line=$(awk -F', *' -v lo=${BAND_LOW} -v hi=${BAND_HIGH} \
-              '($3+0>=lo)&&($4+0<=hi){printf "%.0f %.2f\n", $7+0, $8+0}' "${lite}" \
-              | sort -k2,2nr | head -n1)
+            # Pick strongest slice inside band
+            best_line=$$(awk -F', *' -v lo=$${BAND_LOW} -v hi=$${BAND_HIGH} '($$3+0>=lo)&&($$4+0<=hi){ printf "%.0f %.2f\n", $$7+0, $$8+0 }' "$${lite}" | sort -k2,2nr | head -n1)
 
-            peak_hz=$(echo "${best_line}" | awk '{print $1}')
-            peak_db=$(echo "${best_line}" | awk '{print $2}')
+            peak_hz=$$(echo "$${best_line}" | awk '{print $$1}')
+            peak_db=$$(echo "$${best_line}" | awk '{print $$2}')
 
-            # Trigger capture
-            if [ -n "${peak_db}" ] && awk -v p="${peak_db}" -v t="${THRESHOLD_DB}" 'BEGIN{exit (p>t)?0:1}'; then
-              echo "TRIGGER: peak ${peak_db} dB at ${peak_hz} Hz — capturing ${DURATION} s IQ"
-              cap_ts=$(date -u +%Y%m%dT%H%M%SZ)
-              out=/mnt/iqdata/watch/trigger_${cap_ts}_${peak_hz}.iq
-              hackrf_transfer -r - -f "${peak_hz}" -s "${RATE}" -a ${AMP} -l ${LNA} -g ${VGA} -b ${BBW} \
-                -n $(( RATE*2*DURATION )) > "${out}" || echo 'capture failed (continuing)'
+            # If a peak exists and exceeds threshold, capture IQ for DURATION seconds
+            if [ -n "$${peak_db}" ] && awk -v p="$${peak_db}" -v t="$${THRESHOLD_DB}" 'BEGIN{exit (p>t)?0:1}'; then
+              echo "TRIGGER: peak $${peak_db} dB at $${peak_hz} Hz — capturing $${DURATION} s IQ"
+              cap_ts=$$(date -u +%Y%m%dT%H%M%SZ)
+              out=/mnt/iqdata/watch/trigger_$${cap_ts}_$${peak_hz}.iq
+              # -n expects I/Q samples count (I+Q = 2*RATE per second)
+              hackrf_transfer -r - -f "$${peak_hz}" -s "$${RATE}" -a $${AMP} -l $${LNA} -g $${VGA} -b $${BBW} \
+                -n $$(($${RATE}*2*$${DURATION})) > "$${out}" || echo 'capture failed (continuing)'
             fi
 
             # Trim old files
-            ls -1tr /mnt/iqdata/sweeps/sweep_*.csv          | head -n -${N_KEEP} | xargs -r rm -f
-            ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv     | head -n -${N_KEEP} | xargs -r rm -f
+            ls -1tr /mnt/iqdata/sweeps/sweep_*.csv          | head -n -$${N_KEEP} | xargs -r rm -f
+            ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv     | head -n -$${N_KEEP} | xargs -r rm -f
             find /mnt/iqdata/watch -type f -name 'trigger_*.iq' -printf '%T+ %p\n' \
-              | sort | head -n -${N_KEEP} | cut -d' ' -f2- | xargs -r rm -f
+              | sort | head -n -$${N_KEEP} | cut -d' ' -f2- | xargs -r rm -f
           done
