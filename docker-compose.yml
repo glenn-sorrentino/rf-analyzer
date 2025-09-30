@@ -61,23 +61,21 @@ services:
         set -euo pipefail;
         apt-get update -qq &&
         apt-get install -y --no-install-recommends hackrf coreutils;
-        rate=10000000;                 # 10 MS/s
-        span_mhz=10;                   # 10 MHz slices match sample rate
-        mkdir -p /data/watch;
+        rate=8000000;
         while true; do
           ts=$$(date -u +%Y%m%dT%H%M%SZ);
-          base=1600;                   # MHz start
+          base=1600;  # MHz
           while [ $$base -lt 1700 ]; do
-            next=$$((base+span_mhz));
-            out=/data/watch/watch_${ts}_${base}-${next}.iq;
-            center=$$(( (base + span_mhz/2)*1000000 ));
+            next=$$((base+20));
+            out=/data/watch_$${ts}_$${base}-$${next}.iq;
             echo Recording $$out;
+            center=$$(( (base+10)*1000000 ));
             hackrf_transfer -r - -f $$center -s $$rate -a 1 -l 32 -g 24 -b 10000000 \
-              -n $$((rate*2*60)) > $$out
-            base=$$next
+              -n $$((rate*2*60)) > $$out;
+            base=$$next;
           done
-          # delete watch IQ older than 14 days
-          find /data/watch -type f -mtime +14 -delete
+          find /data -type f -name 'watch_*.iq' -printf '%T+ %p\n' \
+            | sort | head -n -20160 | cut -d' ' -f2- | xargs -r rm -f;
         done
       "
     restart: unless-stopped
