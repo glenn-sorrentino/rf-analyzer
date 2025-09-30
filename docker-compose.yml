@@ -55,46 +55,41 @@ services:
         done
       "
 
-    hackrf-trigger:
-      image: debian:stable-slim
-      container_name: hackrf-trigger
-      devices:
-        - /dev/bus/usb:/dev/bus/usb
-      volumes:
-        - /mnt/iqdata:/data
-      command: >
-        bash -lc "
-          set -euo pipefail;
-          export DEBIAN_FRONTEND=noninteractive;
-          apt-get update -qq &&
-          apt-get install -y --no-install-recommends -qq hackrf coreutils gawk;
-          mkdir -p /data/watch;
-          rate=8000000;
-          N_KEEP=20160;  # ~14 days
-          THRESH=-30;    # dB trigger threshold
-          while true; do
-            latest=$$(ls -1tr /mnt/iqdata/sweeps/*_lite.csv 2>/dev/null | tail -n1 || true);
-            [ -z \"$$latest\" ] && sleep 5 && continue;
-            awk -F',' -v T=$$THRESH -v rate=$$rate -v ts=$$(date -u +%Y%m%dT%H%M%SZ) '
-              {
-                low=$$2+0; high=$$3+0; peak_hz=$$6+0; peak_db=$$7+0;
-                if (low<=1700000000 && high>=1600000000 && peak_db>T) {
-                  base=int(low/1e6);
-                  next=int(high/1e6);
-                  center=int((base+10)*1e6);
-                  printf(\"TRIGGER: %.0f Hz peak %.2f dB in %d-%d MHz\\n\", peak_hz, peak_db, base, next) > \"/dev/stderr\";
-                  cmd=sprintf(\"hackrf_transfer -r - -f %d -s %d -a 1 -l 32 -g 24 -b 10000000 -n %d > /data/watch/watch_%s_%d-%d.iq\", center, rate, rate*2*60, ts, base, next);
-                  system(cmd);
-                }
-              }' \"$$latest\";
-            # prune old
-            find /data/watch -type f -name 'watch_*.iq' -printf '%T+ %p\n' \
-              | sort | head -n -$$N_KEEP | cut -d' ' -f2- | xargs -r rm -f;
-            sleep 10;
-          done
-        "
-      restart: unless-stopped
-      profiles: ["watch"]
+  hackrf-trigger:
+    image: debian:stable-slim
+    container_name: hackrf-trigger
+    volumes:
+      - /mnt/iqdata:/data
+    command: >
+      bash -lc "
+        set -euo pipefail;
+        apt-get update -qq &&
+        apt-get install -y --no-install-recommends -qq coreutils gawk hackrf;
+        mkdir -p /data/watch;
+        THRESHOLD=-30;    # dBFS trigger
+        rate=8000000;
+        while true; do
+          latest=$$(ls -1t /data/sweeps/*_lite.csv 2>/dev/null | head -n1 || true);
+          [ -z \"$$latest\" ] && sleep 5 && continue;
+
+          peak_line=$$(tail -n1 \"$$latest\");
+          peak_hz=$$(echo \"$$peak_line\" | awk -F, '{print $7}');
+          peak_db=$$(echo \"$$peak_line\" | awk -F, '{print $8}');
+
+          if [ \"$$peak_hz\" -ge 1600000000 ] && [ \"$$peak_hz\" -le 1700000000 ] && \
+             awk "BEGIN{exit !($$peak_db > $$THRESHOLD)}"; then
+            ts=$$(date -u +%Y%m%dT%H%M%SZ);
+            out=/data/watch/trigger_$${ts}.iq;
+            echo \"Trigger! Capturing $$out at $$peak_hz Hz (peak $$peak_db dB)\";
+            center=$$peak_hz;
+            hackrf_transfer -r - -f $$center -s $$rate -a 1 -l 32 -g 24 -b 10000000 \
+              -n $$(( $$rate*2*60 )) > \"$$out\";
+          fi
+          sleep 5;
+        done
+      "
+    restart: unless-stopped
+    profiles: ["trigger"]
 
   nginx:
     image: nginx:alpine
