@@ -54,8 +54,8 @@ services:
 
           # strongest slice inside the watch band (col7=peak_hz, col8=peak_db)
           best_line=$$(awk -F', *' -v lo=$${BAND_LOW} -v hi=$${BAND_HIGH} '
-            ($$3+0>=lo)&&($$4+0<=hi){printf \"%.0f %.2f\\n\", $$7+0, $$8+0}
-          ' \"$$lite\" | sort -k2,2nr | head -n1);
+            ($$3+0<hi)&&($$4+0>lo){printf "%.0f %.2f\n", $$7+0, $$8+0}
+          ' "$$lite" | sort -k2,2nr | head -n1)
 
           peak_hz=$$(echo \"$$best_line\" | awk '{print $$1}');
           peak_db=$$(echo \"$$best_line\" | awk '{print $$2}');
