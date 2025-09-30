@@ -11,7 +11,6 @@ services:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
     profiles: ["ui"]
-    # removed depends_on to avoid starting sweep with UI
 
   hackrf-sweep:
     image: debian:stable-slim
@@ -26,15 +25,20 @@ services:
     command: >
       bash -lc "
         set -euo pipefail;
+        export DEBIAN_FRONTEND=noninteractive;
         apt-get update -qq &&
-        apt-get install -y --no-install-recommends hackrf coreutils gawk &&
+        apt-get install -y --no-install-recommends -qq hackrf coreutils gawk &&
         mkdir -p /mnt/iqdata/sweeps;
+        N_KEEP=20160;  # minutes (~14 days)
         while true; do
           ts=$$(date -u +%Y%m%dT%H%M%SZ);
           raw=/mnt/iqdata/sweeps/sweep_$${ts}.csv;
           lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv;
           echo '>> sweep' $$ts;
+          # ~100 kHz resolution bins
           timeout 60 hackrf_sweep -f 1:6000 -w 100000 -a 1 -l 32 -g 24 -r $$raw || true;
+
+          # Summarize each 5 MHz slice to: ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
           awk -F', *' '{
             low=$$3+0; high=$$4+0; bw=$$5+0;
             max=-1e9; idx=-1; sum=0; cnt=0;
@@ -44,42 +48,53 @@ services:
               printf \"%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\\n\", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
             }
           }' $$raw > $$lite;
-          # keep last 14 days (~20160 minutes)
-          ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -20160 | xargs -r rm -f;
-          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -20160 | xargs -r rm -f;
-        done"
 
-  hackrf-watch:
-    image: debian:stable-slim
-    container_name: hackrf-watch
-    devices:
-      - /dev/bus/usb:/dev/bus/usb
-    volumes:
-      - /mnt/iqdata:/data
-    command: >
-      bash -lc "
-        set -euo pipefail;
-        apt-get update -qq &&
-        apt-get install -y --no-install-recommends hackrf coreutils;
-        rate=8000000;
-        while true; do
-          ts=$$(date -u +%Y%m%dT%H%M%SZ);
-          base=1600;  # MHz
-          while [ $$base -lt 1700 ]; do
-            next=$$((base+20));
-            out=/data/watch_$${ts}_$${base}-$${next}.iq;
-            echo Recording $$out;
-            center=$$(( (base+10)*1000000 ));
-            hackrf_transfer -r - -f $$center -s $$rate -a 1 -l 32 -g 24 -b 10000000 \
-              -n $$((rate*2*60)) > $$out;
-            base=$$next;
-          done
-          find /data -type f -name 'watch_*.iq' -printf '%T+ %p\n' \
-            | sort | head -n -20160 | cut -d' ' -f2- | xargs -r rm -f;
+          # keep last ~14 days
+          ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -$$N_KEEP | xargs -r rm -f;
+          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -$$N_KEEP | xargs -r rm -f;
         done
       "
-    restart: unless-stopped
-    profiles: ["watch"]
+
+    hackrf-trigger:
+      image: debian:stable-slim
+      container_name: hackrf-trigger
+      devices:
+        - /dev/bus/usb:/dev/bus/usb
+      volumes:
+        - /mnt/iqdata:/data
+      command: >
+        bash -lc "
+          set -euo pipefail;
+          export DEBIAN_FRONTEND=noninteractive;
+          apt-get update -qq &&
+          apt-get install -y --no-install-recommends -qq hackrf coreutils gawk;
+          mkdir -p /data/watch;
+          rate=8000000;
+          N_KEEP=20160;  # ~14 days
+          THRESH=-30;    # dB trigger threshold
+          while true; do
+            latest=$$(ls -1tr /mnt/iqdata/sweeps/*_lite.csv 2>/dev/null | tail -n1 || true);
+            [ -z \"$$latest\" ] && sleep 5 && continue;
+            awk -F',' -v T=$$THRESH -v rate=$$rate -v ts=$$(date -u +%Y%m%dT%H%M%SZ) '
+              {
+                low=$$2+0; high=$$3+0; peak_hz=$$6+0; peak_db=$$7+0;
+                if (low<=1700000000 && high>=1600000000 && peak_db>T) {
+                  base=int(low/1e6);
+                  next=int(high/1e6);
+                  center=int((base+10)*1e6);
+                  printf(\"TRIGGER: %.0f Hz peak %.2f dB in %d-%d MHz\\n\", peak_hz, peak_db, base, next) > \"/dev/stderr\";
+                  cmd=sprintf(\"hackrf_transfer -r - -f %d -s %d -a 1 -l 32 -g 24 -b 10000000 -n %d > /data/watch/watch_%s_%d-%d.iq\", center, rate, rate*2*60, ts, base, next);
+                  system(cmd);
+                }
+              }' \"$$latest\";
+            # prune old
+            find /data/watch -type f -name 'watch_*.iq' -printf '%T+ %p\n' \
+              | sort | head -n -$$N_KEEP | cut -d' ' -f2- | xargs -r rm -f;
+            sleep 10;
+          done
+        "
+      restart: unless-stopped
+      profiles: ["watch"]
 
   nginx:
     image: nginx:alpine
