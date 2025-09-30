@@ -72,10 +72,6 @@ services:
               printf \"%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\\n\", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
             }
           }' $$raw > $$lite;
-
-          # Keep rolling last 1440 minutes (24h): raw & lite
-          ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -1440 | xargs -r rm -f;
-          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -1440 | xargs -r rm -f;
         done"
 
   nginx:
