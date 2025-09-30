@@ -57,9 +57,7 @@ services:
           ts=$$(date -u +%Y%m%dT%H%M%SZ);
           outfile=/mnt/iqdata/sweeps/sweep_$${ts}.csv;
           echo '>> sweep' $$ts;
-          # 100 kHz bins across 1–6 GHz (much finer resolution, slower and bigger files)
-          timeout 300 hackrf_sweep -f 1:6000 -w 100000 -a 1 -l 32 -g 24 -r $$outfile || true;
-          # keep rolling last 1440 minutes (24h * 60)
+          timeout 60 hackrf_sweep -f 1:6000 -w 10000000 -r $$outfile || true;
           ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -1440 | xargs -r rm -f;
         done"
 
