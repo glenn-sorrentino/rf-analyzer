@@ -56,7 +56,7 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
     volumes:
-      - /mnt/iqdata:/data          # sweeps under /data/sweeps, IQ under /data/watch
+      - /mnt/iqdata:/data
     restart: unless-stopped
     profiles: ["trigger"]
     command:
@@ -68,36 +68,33 @@ services:
         apt-get update -qq &&
         apt-get install -y --no-install-recommends -qq coreutils gawk hackrf
         mkdir -p /data/watch
-        THRESHOLD_DB=-30     # trigger if peak dB > this (e.g., -30 dBFS)
+        THRESHOLD_DB=-30
         rate=8000000
-        N_KEEP=20160         # keep ~14 days of minute files
+        N_KEEP=20160
         while true; do
-          latest=$(ls -1t /data/sweeps/*_lite.csv 2>/dev/null | head -n1 || true)
-          [ -z "$latest" ] && sleep 5 && continue
+          latest=$$(ls -1t /data/sweeps/*_lite.csv 2>/dev/null | head -n1 || true)
+          [ -z "$$latest" ] && sleep 5 && continue
 
-          # Find strongest bin between 1.6–1.7 GHz in the latest lite CSV
-          best_line=$(awk -F', *' '
-            ($3+0>=1600000000)&&($4+0<=1700000000){
-              low=$3+0; bw=$5+0; max=-1e9; idx=-1;
-              for(i=7;i<=NF;i++){v=$i+0; if(v>max){max=v; idx=i-7}}
+          best_line=$$(awk -F', *' '
+            ($$3+0>=1600000000)&&($$4+0<=1700000000){
+              low=$$3+0; bw=$$5+0; max=-1e9; idx=-1;
+              for(i=7;i<=NF;i++){v=$$i+0; if(v>max){max=v; idx=i-7}}
               if(idx>=0){peak=low+(idx+0.5)*bw; printf "%.0f %.2f\n", peak, max}
-            }' "$latest" | sort -k2,2nr | head -n1)
+            }' "$$latest" | sort -k2,2nr | head -n1)
 
-          peak_hz=$(echo "$best_line" | awk '{print $1}')
-          peak_db=$(echo "$best_line" | awk '{print $2}')
-          [ -z "${peak_db:-}" ] && sleep 5 && continue
+          peak_hz=$$(echo "$$best_line" | awk '{print $$1}')
+          peak_db=$$(echo "$$best_line" | awk '{print $$2}')
+          [ -z "$$peak_db" ] && sleep 5 && continue
 
-          # Trigger if peak exceeds threshold
-          awk -v p="$peak_db" -v t="$THRESHOLD_DB" 'BEGIN{exit (p>t)?0:1}' && {
-            ts=$(date -u +%Y%m%dT%H%M%SZ)
-            center=$(printf '%.0f' "$peak_hz")
-            out=/data/watch/trigger_${ts}_${center}.iq
-            echo "Trigger: peak ${peak_db} dB at ${center} Hz — recording $out"
-            hackrf_transfer -r - -f "$center" -s "$rate" -a 1 -l 32 -g 24 -b 10000000 \
-              -n $(( rate*2*60 )) > "$out" || true
-            # prune old IQ files
+          awk -v p="$$peak_db" -v t="$$THRESHOLD_DB" 'BEGIN{exit (p>t)?0:1}' && {
+            ts=$$(date -u +%Y%m%dT%H%M%SZ)
+            center=$$(printf '%.0f' "$$peak_hz")
+            out=/data/watch/trigger_$${ts}_$${center}.iq
+            echo "Trigger: peak $$peak_db dB at $$center Hz — recording $$out"
+            hackrf_transfer -r - -f "$$center" -s "$$rate" -a 1 -l 32 -g 24 -b 10000000 \
+              -n $$(( $$rate*2*60 )) > "$$out" || true
             find /data/watch -type f -name 'trigger_*.iq' -printf '%T+ %p\n' \
-              | sort | head -n -"$N_KEEP" | cut -d' ' -f2- | xargs -r rm -f
+              | sort | head -n -$$N_KEEP | cut -d' ' -f2- | xargs -r rm -f
           }
 
           sleep 5
