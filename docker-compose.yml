@@ -51,14 +51,31 @@ services:
       bash -lc "
         set -euo pipefail;
         apt-get update -qq &&
-        apt-get install -y --no-install-recommends hackrf coreutils &&
+        apt-get install -y --no-install-recommends hackrf coreutils gawk &&
         mkdir -p /mnt/iqdata/sweeps;
         while true; do
           ts=$$(date -u +%Y%m%dT%H%M%SZ);
-          outfile=/mnt/iqdata/sweeps/sweep_$${ts}.csv;
+          raw=/mnt/iqdata/sweeps/sweep_$${ts}.csv;
+          lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv;
           echo '>> sweep' $$ts;
-          timeout 60 hackrf_sweep -f 1:6000 -w 10000000 -r $$outfile || true;
+          # ~100 kHz resolution bins
+          timeout 60 hackrf_sweep -f 1:6000 -w 100000 -a 1 -l 32 -g 24 -r $$raw || true;
+
+          # Summarize each 5 MHz slice to: ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
+          awk -F', *' '{
+            low=$$3+0; high=$$4+0; bw=$$5+0;
+            max=-1e9; idx=-1; sum=0; cnt=0;
+            for(i=7;i<=NF;i++){v=$$i+0; sum+=v; cnt++; if(v>max){max=v; idx=i-7}}
+            if(cnt>0){
+              peak_hz=low + (idx+0.5)*bw;
+              mean=sum/cnt;
+              printf \"%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\\n\", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
+            }
+          }' $$raw > $$lite;
+
+          # Keep rolling last 1440 minutes (24h): raw & lite
           ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -1440 | xargs -r rm -f;
+          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -1440 | xargs -r rm -f;
         done"
 
   nginx:
