@@ -23,7 +23,7 @@ services:
         SWEEP_SEC=60;              # each sweep run time (seconds)
         RATE=8000000;              # 8 Msps for IQ capture
         DURATION=120;              # seconds to capture on trigger (2 minutes)
-        THRESHOLD_DB=-100;          # trigger threshold
+        THRESHOLD_DB=-45;          # trigger threshold
         BAND_LOW=1600000000;       # 1.6 GHz
         BAND_HIGH=1700000000;      # 1.7 GHz
         LNA=32; VGA=24; AMP=1; BBW=10000000;  # gains / baseband BW
