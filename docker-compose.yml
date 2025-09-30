@@ -54,11 +54,10 @@ services:
         apt-get install -y --no-install-recommends hackrf coreutils &&
         mkdir -p /mnt/iqdata/sweeps;
         while true; do
-          ts=$(date -u +%Y%m%dT%H%M%SZ);
-          outfile=/mnt/iqdata/sweeps/sweep_$ts.csv;
-          echo '>> sweep $ts';
-          timeout 60 hackrf_sweep -f 1:6000 -w 10000000 -r $outfile || true;
-          # keep only most recent 1440 sweeps (≈24h of 1-min files)
+          ts=$$(date -u +%Y%m%dT%H%M%SZ);
+          outfile=/mnt/iqdata/sweeps/sweep_$${ts}.csv;
+          echo '>> sweep' $$ts;
+          timeout 60 hackrf_sweep -f 1:6000 -w 10000000 -r $$outfile || true;
           ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -1440 | xargs -r rm -f;
         done"
 
