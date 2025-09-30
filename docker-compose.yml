@@ -57,7 +57,9 @@ services:
           ts=$$(date -u +%Y%m%dT%H%M%SZ);
           outfile=/mnt/iqdata/sweeps/sweep_$${ts}.csv;
           echo '>> sweep' $$ts;
-          timeout 60 hackrf_sweep -f 1:6000 -w 10000000 -r $$outfile || true;
+          # NOTE: -w must be <= 5000000
+          timeout 60 hackrf_sweep -f 1:6000 -w 5000000 -a 1 -l 32 -g 24 -r $$outfile || true;
+          # keep rolling last 1440 minutes (24h * 60)
           ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -1440 | xargs -r rm -f;
         done"
 
