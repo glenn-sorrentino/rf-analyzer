@@ -38,7 +38,7 @@ services:
             lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv
 
             echo ">> sweep $${ts}"
-            timeout $${SWEEP_SEC} hackrf_sweep -f 1:6000 -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} -r "$$raw" || true
+            timeout $${SWEEP_SEC} hackrf_sweep -f $${BAND_LOW}:$${BAND_HIGH} -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} -r "$$raw" || true
 
             # Summarize each 5 MHz slice -> ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
             awk -F', *' '{
@@ -71,8 +71,8 @@ services:
               cap_ts=$$(date -u +%Y%m%dT%H%M%SZ)
               out=/mnt/iqdata/watch/trigger_$${cap_ts}_$${peak_hz}.iq
               # -n expects I/Q samples count (I+Q = 2*RATE per second)
-              hackrf_transfer -r - -f "$$peak_hz" -s "$$RATE" -a $$AMP -l $$LNA -g $$VGA -b $$BBW \
-                -n $$(($$RATE*2*$$DURATION)) > "$$out" || echo 'capture failed (continuing)'
+              hackrf_transfer -r "$$out" -f "$$peak_hz" -s "$$RATE" -a $$AMP -l $$LNA -g $$VGA -b $$BBW \
+                -n $$(($$RATE*2*$$DURATION)) || echo 'capture failed (continuing)'
             fi
 
             # Trim old files
