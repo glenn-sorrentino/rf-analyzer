@@ -42,10 +42,10 @@ services:
         sh -c "cat <<EOF > /etc/nginx/conf.d/default.conf
         server {
           listen 443 ssl;
-          server_name sdr.local;
+          server_name rf.local;
 
-          ssl_certificate /etc/nginx/certs/sdr.local+2.pem;
-          ssl_certificate_key /etc/nginx/certs/sdr.local+2-key.pem;
+          ssl_certificate /etc/nginx/certs/rf.local+2.pem;
+          ssl_certificate_key /etc/nginx/certs/rf.local+2-key.pem;
 
           location / {
             proxy_pass http://openwebrx:8073;
