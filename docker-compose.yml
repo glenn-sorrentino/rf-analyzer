@@ -1,7 +1,7 @@
 services:
   hackrf-manager:
     image: debian:stable-slim
-    profiles: ["sweep"]        # start with: docker compose -f docker-compose.yml --profile sweep up -d
+    profiles: ["sweep"]
     privileged: true
     network_mode: host
     restart: unless-stopped
@@ -21,13 +21,13 @@ services:
           apt-get install -y --no-install-recommends -qq hackrf coreutils gawk
           mkdir -p /mnt/iqdata/sweeps /mnt/iqdata/watch
 
-          # --- tunables (edit these) ---
-          N_KEEP=20160               # keep ~14 days of minute files
+          # --- tunables ---
+          N_KEEP=20160               # ~14 days of minute files
           BIN_WIDTH=100000           # 100 kHz bins
-          SWEEP_SEC=60               # each sweep run time (seconds)
+          SWEEP_SEC=60               # seconds per sweep
           RATE=8000000               # 8 Msps for IQ capture
-          DURATION=120               # seconds to capture on trigger (2 minutes)
-          THRESHOLD_DB=-20           # trigger threshold (higher/more positive = stricter)
+          DURATION=120               # seconds of IQ on trigger (2 min)
+          THRESHOLD_DB=-45           # trigger threshold (higher/more positive = stricter)
           BAND_LOW=1600000000        # 1.6 GHz
           BAND_HIGH=1700000000       # 1.7 GHz
           LNA=32; VGA=24; AMP=1; BBW=10000000
@@ -53,7 +53,11 @@ services:
             }' "$${raw}" > "$${lite}" || true
 
             # Pick strongest slice inside band
-            best_line=$$(awk -F', *' -v lo=$${BAND_LOW} -v hi=$${BAND_HIGH} '($$3+0>=lo)&&($$4+0<=hi){ printf "%.0f %.2f\n", $$7+0, $$8+0 }' "$${lite}" | sort -k2,2nr | head -n1)
+            best_line=$$(awk -F', *' -v lo=$${BAND_LOW} -v hi=$${BAND_HIGH} \
+              '($$2+0>=lo)&&($$3+0<=hi){ printf "%.0f %.2f\n", $$6+0, $$7+0 }' "$${lite}" \
+              | sort -k2,2nr | head -n1)
+
+            echo "DEBUG: best_in_band=$$best_line threshold=$$THRESHOLD_DB"
 
             peak_hz=$$(echo "$${best_line}" | awk '{print $$1}')
             peak_db=$$(echo "$${best_line}" | awk '{print $$2}')
@@ -69,8 +73,8 @@ services:
             fi
 
             # Trim old files
-            ls -1tr /mnt/iqdata/sweeps/sweep_*.csv          | head -n -$${N_KEEP} | xargs -r rm -f
-            ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv     | head -n -$${N_KEEP} | xargs -r rm -f
+            ls -1tr /mnt/iqdata/sweeps/sweep_*.csv      | head -n -$${N_KEEP} | xargs -r rm -f
+            ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -$${N_KEEP} | xargs -r rm -f
             find /mnt/iqdata/watch -type f -name 'trigger_*.iq' -printf '%T+ %p\n' \
               | sort | head -n -$${N_KEEP} | cut -d' ' -f2- | xargs -r rm -f
           done
