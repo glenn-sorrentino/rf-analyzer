@@ -11,6 +11,8 @@ services:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
     profiles: ["ui"]
+    depends_on:
+      - hackrf-sweep
 
   recorder:
     image: debian:stable-slim
@@ -73,9 +75,9 @@ services:
             }
           }' $$raw > $$lite;
 
-          # Keep rolling last 1440 minutes (24h): raw & lite
-          ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -1440 | xargs -r rm -f;
-          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -1440 | xargs -r rm -f;
+          # Keep rolling last 14 days (20160 minutes): raw & lite
+          ls -1tr /mnt/iqdata/sweeps/sweep_*.csv | head -n -20160 | xargs -r rm -f;
+          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -20160 | xargs -r rm -f;
         done"
 
   nginx:
