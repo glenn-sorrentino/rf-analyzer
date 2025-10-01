@@ -26,7 +26,7 @@ services:
           SWEEP_SEC=60               # seconds per sweep
           RATE=8000000               # 8 Msps for IQ capture
           DURATION=120               # seconds of IQ on trigger
-          THRESHOLD_DB=-45           # trigger threshold (p > t)
+          THRESHOLD_DB=-65           # trigger threshold (p > t)
           BAND_LOW_MHZ=1600          # 1600 MHz
           BAND_HIGH_MHZ=1700         # 1700 MHz
           LNA=32; VGA=24; AMP=1; BBW=10000000
