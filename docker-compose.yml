@@ -21,19 +21,19 @@ services:
           mkdir -p /mnt/iqdata/sweeps /mnt/iqdata/watch
 
           # --- tunables ---
-          N_KEEP=20160               # ~14 days of minute files
-          BIN_WIDTH=100000           # 100 kHz bins
-          SWEEP_SEC=60               # seconds per sweep
-          RATE=8000000               # 8 Msps for IQ capture
-          DURATION=120               # seconds of IQ on trigger
-          THRESHOLD_DB=-65           # trigger threshold (p > t)
-          BAND_LOW_MHZ=1600          # 1600 MHz
-          BAND_HIGH_MHZ=1700         # 1700 MHz
+          N_KEEP=20160
+          BIN_WIDTH=100000            # Hz
+          SWEEP_SEC=60                # seconds per sweep
+          RATE=8000000                # samples/sec
+          DURATION=120                # seconds of IQ on trigger
+          THRESHOLD_DB=-65            # your new threshold
+          BAND_LOW_MHZ=1600           # MHz
+          BAND_HIGH_MHZ=1700          # MHz
           LNA=32; VGA=24; AMP=1; BBW=10000000
 
-          # Precompute band edges in Hz for comparisons
-          LO_HZ=$$((BAND_LOW_MHZ * 1000000))
-          HI_HZ=$$((BAND_HIGH_MHZ * 1000000))
+          # derived (keep units straight)
+          BAND_LOW_HZ=$((BAND_LOW_MHZ * 1000000))
+          BAND_HIGH_HZ=$((BAND_HIGH_MHZ * 1000000))
 
           while true; do
             ts=$$(date -u +%Y%m%dT%H%M%SZ)
@@ -41,12 +41,10 @@ services:
             lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv
 
             echo ">> sweep $${ts}"
-            timeout $${SWEEP_SEC} hackrf_sweep \
-              -f $${BAND_LOW_MHZ}:$${BAND_HIGH_MHZ} \
-              -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} \
-              -r "$${raw}" || true
+            # hackrf_sweep expects MHz for -f
+            timeout $${SWEEP_SEC} hackrf_sweep -f $${BAND_LOW_MHZ}:$${BAND_HIGH_MHZ} -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} -r "$$raw" || true
 
-            # Summarize each slice -> ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
+            # Summarize each ~5 MHz slice -> ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
             awk -F', *' '{
               low=$$3+0; high=$$4+0; bw=$$5+0;
               max=-1e9; idx=-1; sum=0; cnt=0;
@@ -56,29 +54,27 @@ services:
                 mean = sum/cnt;
                 printf "%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\n", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
               }
-            }' "$${raw}" > "$${lite}" || true
+            }' "$$raw" > "$$lite" || true
 
-            # Pick strongest slice inside band (2=lowHz, 3=highHz, 6=peak_hz, 7=peak_db)
-            best_line=$$(awk -F', *' -v lo=$${LO_HZ} -v hi=$${HI_HZ} '{
-                low=$$2+0; high=$$3+0;
-                if (low>=lo && high<=hi) { printf "%.0f %.2f\n", $$6+0, $$7+0 }
-              }' "$${lite}" | sort -k2,2nr | head -n1)
+            # Pick strongest slice inside band (cols: 2=low, 3=high, 6=peak_hz, 7=peak_db)
+            best_line=$$(awk -F', *' -v lo=$${BAND_LOW_HZ} -v hi=$${BAND_HIGH_HZ} \
+              '{ low=$$2+0; high=$$3+0; if(low>=lo && high<=hi) printf "%.0f %.2f\n", $$6+0, $$7+0 }' "$$lite" \
+              | sort -k2,2nr | head -n1)
 
-            [ -z "$${best_line}" ] && { echo "DEBUG: none-in-band; skipping"; continue; }
+            [ -z "$$best_line" ] && { echo "DEBUG: none-in-band; skipping"; continue; }
 
-            echo "DEBUG: best_in_band=$${best_line} threshold=$${THRESHOLD_DB}"
+            echo "DEBUG: best_in_band=$$best_line threshold=$$THRESHOLD_DB"
 
-            peak_hz=$$(echo "$${best_line}" | awk '{print $$1}')
-            peak_db=$$(echo "$${best_line}" | awk '{print $$2}')
+            peak_hz=$$(echo "$$best_line" | awk '{print $$1}')
+            peak_db=$$(echo "$$best_line" | awk '{print $$2}')
 
             # Trigger if peak exceeds threshold
-            if [ -n "$${peak_db}" ] && awk -v p="$${peak_db}" -v t="$${THRESHOLD_DB}" 'BEGIN{exit (p>t)?0:1}'; then
-              echo "TRIGGER: peak $${peak_db} dB at $${peak_hz} Hz — capturing $${DURATION} s IQ"
+            if [ -n "$$peak_db" ] && awk -v p="$$peak_db" -v t="$${THRESHOLD_DB}" 'BEGIN{exit (p>t)?0:1}'; then
+              echo "TRIGGER: peak $$peak_db dB at $$peak_hz Hz — capturing $$DURATION s IQ"
               cap_ts=$$(date -u +%Y%m%dT%H%M%SZ)
               out=/mnt/iqdata/watch/trigger_$${cap_ts}_$${peak_hz}.iq
-              # -r writes IQ directly to file; -n is complex sample count (I+Q = 2 bytes/sample)
-              hackrf_transfer -r "$${out}" -f "$${peak_hz}" -s "$${RATE}" -a $${AMP} -l $${LNA} -g $${VGA} -b $${BBW} \
-                -n $$((RATE*2*DURATION)) || echo 'capture failed (continuing)'
+              # -r <file> writes raw IQ to file; -n expects I+Q sample count (= 2*RATE per sec)
+              hackrf_transfer -r "$$out" -f "$$peak_hz" -s "$$RATE" -a $$AMP -l $$LNA -g $$VGA -b $$BBW -n $$(($$RATE*2*$$DURATION)) || echo 'capture failed (continuing)'
             fi
 
             # Trim old files
