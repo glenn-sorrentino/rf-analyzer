@@ -18,4 +18,18 @@ echo \
 # Update and install
 sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin git
+
+# Add your user to the docker group
+sudo usermod -aG docker $USER
+
+# Refresh group membership (log out and back in, or run:)
+newgrp docker
+
+#	For Samsung T7, edit the Pi boot cmdline and add usb-storage.quirks=04e8:4001:u at the end.
+sudo nano /boot/firmware/cmdline.txt
+
+# Reboot
+sudo reboot
 ```
+
+##
