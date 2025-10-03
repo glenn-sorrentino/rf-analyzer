@@ -41,10 +41,13 @@ services:
             lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv
 
             echo ">> sweep $${ts}"
-            # hackrf_sweep expects MHz for -f
-            timeout $${SWEEP_SEC} hackrf_sweep -f $${BAND_LOW_MHZ}:$${BAND_HIGH_MHZ} -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} -r "$$raw" || true
+            # redirect CSV output to file
+            timeout $${SWEEP_SEC} hackrf_sweep \
+              -f $${BAND_LOW_MHZ}:$${BAND_HIGH_MHZ} \
+              -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} \
+              > "$$raw" || true
 
-            # Summarize each ~5 MHz slice -> ts,low,high,bin_width,num_bins,peak_hz,peak_db,mean_db
+            # Summarize each ~5 MHz slice
             awk -F', *' '{
               low=$$3+0; high=$$4+0; bw=$$5+0;
               max=-1e9; idx=-1; sum=0; cnt=0;
@@ -56,7 +59,7 @@ services:
               }
             }' "$$raw" > "$$lite" || true
 
-            # Pick strongest slice inside band (cols: 2=low, 3=high, 6=peak_hz, 7=peak_db)
+            # Pick strongest slice inside band
             best_line=$$(awk -F', *' -v lo=$${BAND_LOW_HZ} -v hi=$${BAND_HIGH_HZ} \
               '{ low=$$2+0; high=$$3+0; if(low>=lo && high<=hi) printf "%.0f %.2f\n", $$6+0, $$7+0 }' "$$lite" \
               | sort -k2,2nr | head -n1)
@@ -73,8 +76,9 @@ services:
               echo "TRIGGER: peak $$peak_db dB at $$peak_hz Hz — capturing $$DURATION s IQ"
               cap_ts=$$(date -u +%Y%m%dT%H%M%SZ)
               out=/mnt/iqdata/watch/trigger_$${cap_ts}_$${peak_hz}.iq
-              # -r <file> writes raw IQ to file; -n expects I+Q sample count (= 2*RATE per sec)
-              hackrf_transfer -r "$$out" -f "$$peak_hz" -s "$$RATE" -a $$AMP -l $$LNA -g $$VGA -b $$BBW -n $$(($$RATE*2*$$DURATION)) || echo 'capture failed (continuing)'
+              hackrf_transfer -r "$$out" -f "$$peak_hz" -s "$$RATE" \
+                -a $$AMP -l $$LNA -g $$VGA -b $$BBW \
+                -n $$(($$RATE*2*$$DURATION)) || echo 'capture failed (continuing)'
             fi
 
             # Trim old files
