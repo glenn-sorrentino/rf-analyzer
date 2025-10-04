@@ -59,26 +59,36 @@ services:
               }
             }' "$$raw" > "$$lite" || true
 
-            # Pick strongest slice inside band
-            best_line=$$(awk -F', *' -v lo=$${BAND_LOW_HZ} -v hi=$${BAND_HIGH_HZ} \
-              '{ low=$$2+0; high=$$3+0; if(low>=lo && high<=hi) printf "%.0f %.2f\n", $$6+0, $$7+0 }' "$$lite" \
-              | sort -k2,2nr | head -n1)
+            # Pick strongest slice inside band (emit peak_hz, peak_db, mean_db)
+            best_line=$$(awk -F', *' -v lo=$${BAND_LOW_HZ} -v hi=$${BAND_HIGH_HZ} '
+              {
+                # fields: 1(ts),2(low),3(high),4(bw),5(cnt),6(peak_hz),7(max_db),8(mean_db)
+                low=$$2+0; high=$$3+0; pkhz=$$6+0; maxdb=$$7+0; meandb=$$8+0;
+                if (low>=lo && high<=hi) printf "%.0f %.2f %.2f\n", pkhz, maxdb, meandb
+              }' "$$lite" | sort -k2,2nr | head -n1)
 
-            [ -z "$$best_line" ] && { echo "DEBUG: none-in-band; skipping"; continue; }
+            if [ -z "$$best_line" ]; then
+              echo "DEBUG: none-in-band; skipping"
+              continue
+            fi
 
-            echo "DEBUG: best_in_band=$$best_line threshold=$$THRESHOLD_DB"
+            peak_hz=$$(awk '{print $$1}' <<<"$$best_line")
+            peak_db=$$(awk '{print $$2}' <<<"$$best_line")
+            mean_db=$$(awk '{print $$3}' <<<"$$best_line")
+            delta_db=$$(awk -v p="$$peak_db" -v m="$$mean_db" 'BEGIN{print p-m}')
 
-            peak_hz=$$(echo "$$best_line" | awk '{print $$1}')
-            peak_db=$$(echo "$$best_line" | awk '{print $$2}')
+            echo "DEBUG: best_in_band peak_db=$$peak_db mean_db=$$mean_db delta=$$delta_db @$$peak_hz threshold=$$THRESHOLD_DB"
 
-            # Trigger if peak exceeds threshold
-            if [ -n "$$peak_db" ] && awk -v p="$$peak_db" -v t="$${THRESHOLD_DB}" 'BEGIN{exit (p>t)?0:1}'; then
-              echo "TRIGGER: peak $$peak_db dB at $$peak_hz Hz — capturing $$DURATION s IQ"
+            # Require both: above threshold AND sufficiently narrow/peaky (delta >= 6 dB)
+            if awk -v p="$$peak_db" -v t="$${THRESHOLD_DB}" -v d="$$delta_db" 'BEGIN{exit (p>t && d>=6)?0:1}'; then
+              echo "TRIGGER: peak $$peak_db dB (Δ=$$delta_db dB) at $$peak_hz Hz — capturing $$DURATION s IQ"
               cap_ts=$$(date -u +%Y%m%dT%H%M%SZ)
               out=/mnt/iqdata/watch/trigger_$${cap_ts}_$${peak_hz}.iq
               hackrf_transfer -r "$$out" -f "$$peak_hz" -s "$$RATE" \
                 -a $$AMP -l $$LNA -g $$VGA -b $$BBW \
                 -n $$(($$RATE*2*$$DURATION)) || echo 'capture failed (continuing)'
+            else
+              echo "DEBUG: not triggered (p>t? $$(awk -v p="$$peak_db" -v t="$${THRESHOLD_DB}" 'BEGIN{print (p>t)?"yes":"no"}'), Δ≥6? $$(awk -v d="$$delta_db" 'BEGIN{print (d>=6)?"yes":"no"}'))"
             fi
 
             # Trim old files
