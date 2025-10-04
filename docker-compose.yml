@@ -26,10 +26,10 @@ services:
           SWEEP_SEC=60                # seconds per sweep
           RATE=8000000                # samples/sec
           DURATION=120                # seconds of IQ on trigger
-          THRESHOLD_DB=-65            # your new threshold
-          BAND_LOW_MHZ=1600           # MHz
-          BAND_HIGH_MHZ=1700          # MHz
-          LNA=32; VGA=24; AMP=1; BBW=10000000
+          THRESHOLD_DB=-72            # your new threshold
+          BAND_LOW_MHZ=1580           # MHz
+          BAND_HIGH_MHZ=1660          # MHz
+          LNA=32; VGA=24; AMP=1; BBW=8000000
 
           # derived (keep units straight)
           BAND_LOW_HZ=$((BAND_LOW_MHZ * 1000000))
