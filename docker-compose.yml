@@ -32,8 +32,8 @@ services:
         LNA=32; VGA=24; AMP=1; BBW=8000000
 
         # helpers
-        samples() { awk -v r="$RATE" -v d="$DURATION" 'BEGIN{printf "%.0f\n", r*d}'; }   # I/Q pairs
-        need_bytes() { awk -v r="$RATE" -v d="$DURATION" 'BEGIN{printf "%.0f\n", r*d*2}'; }  # 1 byte I + 1 byte Q
+        samples()   { awk -v r="$$RATE" -v d="$$DURATION" 'BEGIN{printf "%.0f\n", r*d}'; }
+        need_bytes(){ awk -v r="$$RATE" -v d="$$DURATION" 'BEGIN{printf "%.0f\n", r*d*2}'; }
 
         BAND_LOW_HZ=$((BAND_LOW_MHZ * 1000000))
         BAND_HIGH_HZ=$((BAND_HIGH_MHZ * 1000000))
