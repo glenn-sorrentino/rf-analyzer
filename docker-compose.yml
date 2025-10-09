@@ -1,4 +1,9 @@
+version: "3.9"
+
 services:
+  # ---------------------------
+  # SWEEP MODE
+  # ---------------------------
   hackrf-manager:
     image: debian:stable-slim
     profiles: ["sweep"]
@@ -10,9 +15,9 @@ services:
     volumes:
       - /mnt/iqdata:/mnt/iqdata
     command:
-    - bash
-    - -lc
-    - |
+      - bash
+      - -lc
+      - |
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive
 
@@ -59,14 +64,14 @@ services:
             if(cnt>0){
               peak_hz = low + (idx+0.5)*bw;
               mean = sum/cnt;
-              printf "%sT%sZ,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\n", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
+              # NOTE: emit 9 fields: date,time,low,high,bw,cnt,peak_hz,max_db,mean_db
+              printf "%s,%s,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\n", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
             }
           }' "$$raw" > "$$lite" || true
 
           # Pick strongest slice inside band (emit peak_hz, peak_db, mean_db)
           best_line=$$(awk -F', *' -v lo=$${BAND_LOW_HZ} -v hi=$${BAND_HIGH_HZ} '
             {
-              # fields: 1(ts),2(low),3(high),4(bw),5(cnt),6(peak_hz),7(max_db),8(mean_db)
               low=$$2+0; high=$$3+0; pkhz=$$6+0; maxdb=$$7+0; meandb=$$8+0;
               if (low>=lo && high<=hi) printf "%.0f %.2f %.2f\n", pkhz, maxdb, meandb
             }' "$$lite" | sort -k2,2nr | head -n1)
@@ -120,3 +125,127 @@ services:
           find /mnt/iqdata/watch -type f -name 'trigger_*.iq' -printf '%T+ %p\n' \
             | sort | head -n -$${N_KEEP} | cut -d' ' -f2- | xargs -r rm -f
         done
+
+  # ---------------------------
+  # WEB UI (OpenWebRX)
+  # ---------------------------
+  openwebrx:
+    image: jketterl/openwebrx-full:latest   # has owrx-admin CLI
+    profiles: ["webui"]
+    container_name: openwebrx
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - "8073:8073"
+    volumes:
+      - ./openwebrx_data:/var/lib/openwebrx
+    restart: unless-stopped
+    environment:
+      - OWX_ADMIN_ENABLED=true
+
+
+  autotuner:
+    image: jketterl/openwebrx-full:latest
+    profiles: ["webui"]
+    depends_on:
+      - openwebrx
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./openwebrx_data:/var/lib/openwebrx
+    environment:
+      SWEEP_URL: "http://rf-verb.local:8088/peak"   # change if your sweeper URL differs
+      MIN_DB: "-70"
+    entrypoint: ["/bin/sh","-lc"]   # <-- this is the key
+    command: >
+      set -euo pipefail;
+      apt-get update -qq &&
+      apt-get install -y -qq curl jq bc >/dev/null;
+      echo "[autotuner] started (SWEEP_URL=$${SWEEP_URL:-unset}, MIN_DB=$${MIN_DB:-unset})";
+      get_dev_id() { owrx-admin device list | awk 'NR>1 && $$1 ~ /^[0-9]+$$/ {print $$1; exit}'; };
+      while :; do
+        resp="$$(curl -fsSL "$${SWEEP_URL:-http://127.0.0.1:8088/peak}" || true)";
+        PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')";
+        PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')";
+        DID="$$(get_dev_id || true)";
+        if [ -n "$$PHZ" ] && [ -n "$$PDB" ] && [ -n "$$DID" ]; then
+          ok="$$(echo "$$PDB > $${MIN_DB:--70}" | bc -l 2>/dev/null || echo 0)";
+          if [ "$$ok" -eq 1 ]; then
+            echo "[autotuner] device=$$DID set center to $$PHZ Hz (peak $$PDB dB)";
+            owrx-admin device set-active "$$DID" >/dev/null 2>&1 || true;
+            owrx-admin device set "$$DID" --frequency "$$PHZ" >/dev/null;
+          else
+            echo "[autotuner] peak too weak ($$PDB dB < $${MIN_DB:--70} dB)";
+          fi;
+        else
+          echo "[autotuner] waiting for peak + device… (PHZ=$${PHZ:-}, PDB=$${PDB:-}, DID=$${DID:-})";
+        fi;
+        sleep 60;
+      done
+
+  # ---------------------------
+  # FREQ PUBLISHER
+  # ---------------------------
+  sweep-publisher:
+    image: python:3.11-slim
+    profiles: ["sweep"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /mnt/iqdata:/mnt/iqdata:ro
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        pip install --no-cache-dir flask==3.0.3
+        python - <<'PY'
+        from flask import Flask, jsonify
+        from pathlib import Path
+        import csv, time
+
+        app = Flask(__name__)
+        SWEEP_DIR = Path("/mnt/iqdata/sweeps")
+
+        def latest_lite():
+            files = sorted(SWEEP_DIR.glob("sweep_*_lite.csv"))
+            return files[-1] if files else None
+
+        @app.get("/peak")
+        def peak():
+            f = latest_lite()
+            if not f:
+                return jsonify({"ok": False, "error": "no_lite_files"}), 404
+
+            best = None
+            with f.open(newline='') as fh:
+                r = csv.reader(fh)
+                for row in r:
+                    if not row:
+                        continue
+                    # take last 3 cols as peak_hz, max_db, mean_db
+                    if len(row) < 3:
+                        continue
+                    try:
+                        peak_hz = float(row[-3])
+                        max_db  = float(row[-2])
+                        mean_db = float(row[-1])
+                    except Exception:
+                        continue
+                    if (best is None) or (max_db > best["max_db"]):
+                        best = {
+                            "peak_hz": round(peak_hz),
+                            "max_db": max_db,
+                            "mean_db": mean_db,
+                            "file": f.name,
+                        }
+
+            if not best:
+                return jsonify({"ok": False, "error": "parse"}), 500
+            best["ok"] = True
+            best["time"] = int(time.time())
+            return jsonify(best)
+
+        app.run(host="0.0.0.0", port=8088)
+        PY
