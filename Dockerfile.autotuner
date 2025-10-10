@@ -1,8 +1,9 @@
 FROM python:3.11-bookworm
 ENV DEBIAN_FRONTEND=noninteractive
 
+# --- system dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates curl \
+    git ca-certificates curl wget gnupg jq bc socat \
     hackrf libhackrf0 libusb-1.0-0-dev \
     soapysdr-tools soapysdr-module-hackrf libsoapysdr-dev \
     libfftw3-dev libjpeg62-turbo-dev \
@@ -12,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcsdr0 libcsdr-dev \
   && rm -rf /var/lib/apt/lists/*
 
+# --- openwebrx core ---
 WORKDIR /app
 RUN git clone https://github.com/jketterl/openwebrx.git . \
  && python -m venv /venv \
@@ -19,9 +21,8 @@ RUN git clone https://github.com/jketterl/openwebrx.git . \
  && /venv/bin/pip install . \
  && /venv/bin/pip install git+https://github.com/jketterl/pycsdr.git
 
- # --- add admin CLI ---
+# --- admin CLI ---
 RUN apt-get update -qq && \
-    apt-get install -y -qq wget gnupg && \
     wget -qO /usr/share/keyrings/openwebrx.gpg https://repo.openwebrx.de/openwebrx.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/openwebrx.gpg] https://repo.openwebrx.de/debian/ bookworm main" \
         > /etc/apt/sources.list.d/openwebrx.list && \
@@ -29,8 +30,9 @@ RUN apt-get update -qq && \
     apt-get install -y -qq openwebrx-admin && \
     rm -rf /var/lib/apt/lists/*
 
+# --- entrypoint ---
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 8073
+WORKDIR /app
 ENTRYPOINT ["/entrypoint.sh"]

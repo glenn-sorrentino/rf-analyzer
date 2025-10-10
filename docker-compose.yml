@@ -1,136 +1,6 @@
-version: "3.9"
-
 services:
-  # ---------------------------
-  # SWEEP MODE
-  # ---------------------------
-  hackrf-manager:
-    image: debian:stable-slim
-    profiles: ["sweep"]
-    privileged: true
-    network_mode: host
-    restart: unless-stopped
-    devices:
-      - /dev/bus/usb:/dev/bus/usb
-    volumes:
-      - /mnt/iqdata:/mnt/iqdata
-    command:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        export DEBIAN_FRONTEND=noninteractive
-
-        apt-get update -qq
-        apt-get install -y --no-install-recommends -qq hackrf coreutils gawk
-        mkdir -p /mnt/iqdata/sweeps /mnt/iqdata/watch
-
-        # --- tunables ---
-        N_KEEP=20160
-        BIN_WIDTH=100000            # Hz
-        SWEEP_SEC=60                # seconds per sweep
-        RATE=8000000                # samples/sec
-        DURATION=120                # seconds of IQ on trigger
-        THRESHOLD_DB=-63
-        BAND_LOW_MHZ=1580
-        BAND_HIGH_MHZ=1660
-        LNA=32; VGA=24; AMP=1; BBW=8000000
-
-        # helpers
-        samples()   { awk -v r="$$RATE" -v d="$$DURATION" 'BEGIN{printf "%.0f\n", r*d}'; }
-        need_bytes(){ awk -v r="$$RATE" -v d="$$DURATION" 'BEGIN{printf "%.0f\n", r*d*2}'; }
-
-        BAND_LOW_HZ=$((BAND_LOW_MHZ * 1000000))
-        BAND_HIGH_HZ=$((BAND_HIGH_MHZ * 1000000))
-
-        hackrf_info >/dev/null 2>&1 || { echo "ERROR: no HackRF detected"; sleep 5; exit 1; }
-
-        while true; do
-          ts=$$(date -u +%Y%m%dT%H%M%SZ)
-          raw=/mnt/iqdata/sweeps/sweep_$${ts}.csv
-          lite=/mnt/iqdata/sweeps/sweep_$${ts}_lite.csv
-
-          echo ">> sweep $${ts}"
-          timeout $${SWEEP_SEC} hackrf_sweep \
-            -f $${BAND_LOW_MHZ}:$${BAND_HIGH_MHZ} \
-            -w $${BIN_WIDTH} -a $${AMP} -l $${LNA} -g $${VGA} \
-            > "$$raw" || true
-
-          # Summarize each ~5 MHz slice
-          awk -F', *' 'NF>=8{
-            low=$$3+0; high=$$4+0; bw=$$5+0;
-            max=-1e9; idx=-1; sum=0; cnt=0;
-            for(i=7;i<=NF;i++){ v=$$i+0; sum+=v; cnt++; if(v>max){ max=v; idx=i-7 } }
-            if(cnt>0){
-              peak_hz = low + (idx+0.5)*bw;
-              mean = sum/cnt;
-              # NOTE: emit 9 fields: date,time,low,high,bw,cnt,peak_hz,max_db,mean_db
-              printf "%s,%s,%.0f,%.0f,%.2f,%d,%.0f,%.2f,%.2f\n", $$1, $$2, low, high, bw, cnt, peak_hz, max, mean;
-            }
-          }' "$$raw" > "$$lite" || true
-
-          # Pick strongest slice inside band (emit peak_hz, peak_db, mean_db)
-          best_line=$$(awk -F', *' -v lo=$${BAND_LOW_HZ} -v hi=$${BAND_HIGH_HZ} '
-            {
-              low=$$2+0; high=$$3+0; pkhz=$$6+0; maxdb=$$7+0; meandb=$$8+0;
-              if (low>=lo && high<=hi) printf "%.0f %.2f %.2f\n", pkhz, maxdb, meandb
-            }' "$$lite" | sort -k2,2nr | head -n1)
-
-          if [ -z "$$best_line" ]; then
-            echo "DEBUG: none-in-band; skipping"
-            continue
-          fi
-
-          peak_hz=$$(awk '{print $$1}' <<<"$$best_line")
-          peak_db=$$(awk '{print $$2}' <<<"$$best_line")
-          mean_db=$$(awk '{print $$3}' <<<"$$best_line")
-          delta_db=$$(awk -v p="$$peak_db" -v m="$$mean_db" 'BEGIN{print p-m}')
-
-          echo "DEBUG: best_in_band peak_db=$$peak_db mean_db=$$mean_db delta=$$delta_db @$${peak_hz}Hz threshold=$$THRESHOLD_DB"
-
-          # Disk-space guard BEFORE capture
-          need=$$(need_bytes)
-          free=$$(df -P /mnt/iqdata | awk 'NR==2{print $$4*1024}')
-          if [ "$$free" -lt "$$need" ]; then
-            echo "WARN: low disk space: need=$$need free=$$free — skipping capture"
-            continue
-          fi
-
-          # Trigger: above threshold AND sufficiently peaky (Δ≥6 dB)
-          if awk -v p="$$peak_db" -v t="$${THRESHOLD_DB}" -v d="$$delta_db" 'BEGIN{exit (p>t && d>=6)?0:1}'; then
-            echo "TRIGGER: peak=$$peak_db dB Δ=$$delta_db dB at $${peak_hz} Hz — capturing $${DURATION}s IQ"
-            cap_ts=$$(date -u +%Y%m%dT%H%M%SZ)
-            tmp=/mnt/iqdata/watch/.trigger_$${cap_ts}_$${peak_hz}.iq.part
-            out=/mnt/iqdata/watch/trigger_$${cap_ts}_$${peak_hz}.iq
-
-            if ! nice -n 10 ionice -c2 -n7 hackrf_transfer \
-                  -r "$$tmp" \
-                  -f "$$peak_hz" \
-                  -s "$$RATE" \
-                  -a "$$AMP" -l "$$LNA" -g "$$VGA" -b "$$BBW" \
-                  -n "$$(samples)"; then
-              echo "ERROR: hackrf_transfer failed (freq=$$peak_hz rate=$$RATE n=$$(samples))"
-              rm -f "$$tmp"
-            else
-              mv -f "$$tmp" "$$out"
-              echo "SAVED: $$out ($$(stat -c%s "$$out" 2>/dev/null || stat -f%z "$$out") bytes)"
-            fi
-          else
-            echo "DEBUG: not triggered (p>t? $$(awk -v p="$$peak_db" -v t="$${THRESHOLD_DB}" 'BEGIN{print (p>t)?"yes":"no"}'), Δ≥6? $$(awk -v d="$${delta_db}" 'BEGIN{print (d>=6)?"yes":"no"}'))"
-          fi
-
-          # Trim old files
-          ls -1tr /mnt/iqdata/sweeps/sweep_*.csv      | head -n -$${N_KEEP} | xargs -r rm -f
-          ls -1tr /mnt/iqdata/sweeps/sweep_*_lite.csv | head -n -$${N_KEEP} | xargs -r rm -f
-          find /mnt/iqdata/watch -type f -name 'trigger_*.iq' -printf '%T+ %p\n' \
-            | sort | head -n -$${N_KEEP} | cut -d' ' -f2- | xargs -r rm -f
-        done
-
-  # ---------------------------
-  # WEB UI (OpenWebRX)
-  # ---------------------------
   openwebrx:
-    image: jketterl/openwebrx-full:latest   # has owrx-admin CLI
+    image: jketterl/openwebrx-full:latest
     profiles: ["webui"]
     container_name: openwebrx
     privileged: true
@@ -142,51 +12,46 @@ services:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
     environment:
-      - OWX_ADMIN_ENABLED=true
-
+      OWX_ADMIN_ENABLED: "true"
 
   autotuner:
-    image: jketterl/openwebrx-full:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.autotuner
     profiles: ["webui"]
     depends_on:
-      - openwebrx
+      openwebrx:
+        condition: service_started
     network_mode: host
     restart: unless-stopped
-    volumes:
-      - ./openwebrx_data:/var/lib/openwebrx
     environment:
-      SWEEP_URL: "http://rf-verb.local:8088/peak"   # change if your sweeper URL differs
+      SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-    entrypoint: ["/bin/sh","-lc"]   # <-- this is the key
-    command: >
-      set -euo pipefail;
-      apt-get update -qq &&
-      apt-get install -y -qq curl jq bc >/dev/null;
-      echo "[autotuner] started (SWEEP_URL=$${SWEEP_URL:-unset}, MIN_DB=$${MIN_DB:-unset})";
-      get_dev_id() { owrx-admin device list | awk 'NR>1 && $$1 ~ /^[0-9]+$$/ {print $$1; exit}'; };
-      while :; do
-        resp="$$(curl -fsSL "$${SWEEP_URL:-http://127.0.0.1:8088/peak}" || true)";
-        PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')";
-        PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')";
-        DID="$$(get_dev_id || true)";
-        if [ -n "$$PHZ" ] && [ -n "$$PDB" ] && [ -n "$$DID" ]; then
-          ok="$$(echo "$$PDB > $${MIN_DB:--70}" | bc -l 2>/dev/null || echo 0)";
-          if [ "$$ok" -eq 1 ]; then
-            echo "[autotuner] device=$$DID set center to $$PHZ Hz (peak $$PDB dB)";
-            owrx-admin device set-active "$$DID" >/dev/null 2>&1 || true;
-            owrx-admin device set "$$DID" --frequency "$$PHZ" >/dev/null;
-          else
-            echo "[autotuner] peak too weak ($$PDB dB < $${MIN_DB:--70} dB)";
-          fi;
-        else
-          echo "[autotuner] waiting for peak + device… (PHZ=$${PHZ:-}, PDB=$${PDB:-}, DID=$${DID:-})";
-        fi;
-        sleep 60;
-      done
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        for i in $(seq 1 30); do
+          openwebrx-admin device list >/dev/null 2>&1 && break || sleep 2
+        done
+        while :; do
+          resp="$(curl -fsSL "$SWEEP_URL" || true)"
+          PHZ="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          if [ -n "$PHZ" ] && [ -n "$PDB" ]; then
+            ok="$(echo "$PDB > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$ok" -eq 1 ]; then
+              RXID="$(openwebrx-admin receiver list -j | jq -r '.[0].id // empty')"
+              if [ -n "$RXID" ]; then
+                openwebrx-admin receiver tune "$RXID" "$PHZ" && \
+                  echo "[autotuner] tuned via CLI -> $PHZ Hz ($PDB dB)"
+              fi
+            fi
+          fi
+          sleep 60
+        done
 
-  # ---------------------------
-  # FREQ PUBLISHER
-  # ---------------------------
   sweep-publisher:
     image: python:3.11-slim
     profiles: ["sweep"]
@@ -216,33 +81,31 @@ services:
         def peak():
             f = latest_lite()
             if not f:
-                return jsonify({"ok": False, "error": "no_lite_files"}), 404
+              return jsonify({"ok": False, "error": "no_lite_files"}), 404
 
             best = None
             with f.open(newline='') as fh:
-                r = csv.reader(fh)
-                for row in r:
-                    if not row:
-                        continue
-                    # take last 3 cols as peak_hz, max_db, mean_db
-                    if len(row) < 3:
-                        continue
-                    try:
-                        peak_hz = float(row[-3])
-                        max_db  = float(row[-2])
-                        mean_db = float(row[-1])
-                    except Exception:
-                        continue
-                    if (best is None) or (max_db > best["max_db"]):
-                        best = {
-                            "peak_hz": round(peak_hz),
-                            "max_db": max_db,
-                            "mean_db": mean_db,
-                            "file": f.name,
-                        }
+              r = csv.reader(fh)
+              for row in r:
+                if not row: continue
+                if len(row) < 3: continue
+                try:
+                  peak_hz = float(row[-3])
+                  max_db  = float(row[-2])
+                  mean_db = float(row[-1])
+                except Exception:
+                  continue
+                if (best is None) or (max_db > best["max_db"]):
+                  best = {
+                    "peak_hz": round(peak_hz),
+                    "max_db": max_db,
+                    "mean_db": mean_db,
+                    "file": f.name,
+                  }
 
             if not best:
-                return jsonify({"ok": False, "error": "parse"}), 500
+              return jsonify({"ok": False, "error": "parse"}), 500
+
             best["ok"] = True
             best["time"] = int(time.time())
             return jsonify(best)
