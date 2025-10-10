@@ -19,16 +19,6 @@ RUN git clone https://github.com/jketterl/openwebrx.git . \
  && /venv/bin/pip install . \
  && /venv/bin/pip install git+https://github.com/jketterl/pycsdr.git
 
- # --- add admin CLI ---
-RUN apt-get update -qq && \
-    apt-get install -y -qq wget gnupg && \
-    wget -qO /usr/share/keyrings/openwebrx.gpg https://repo.openwebrx.de/openwebrx.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/openwebrx.gpg] https://repo.openwebrx.de/debian/ bookworm main" \
-        > /etc/apt/sources.list.d/openwebrx.list && \
-    apt-get update -qq && \
-    apt-get install -y -qq openwebrx-admin && \
-    rm -rf /var/lib/apt/lists/*
-
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
