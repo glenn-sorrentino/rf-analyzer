@@ -21,7 +21,7 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    network_mode: "service:openwebrx"
+    network_mode: "host"
     restart: unless-stopped
     # run the package’s binary directly — no env interpolation risk
     entrypoint: ["/usr/bin/soapy_connector"]
