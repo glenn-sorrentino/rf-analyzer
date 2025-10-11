@@ -4,7 +4,6 @@ services:
     profiles: ["webui"]
     container_name: openwebrx
     privileged: true
-    # REMOVE USB MAPPING HERE
     ports:
       - "8073:8073"
     volumes:
@@ -25,7 +24,7 @@ services:
     network_mode: "service:openwebrx"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL","ss -lnt | grep -q ':35397 '"]
+      test: ["CMD-SHELL","ss -lnt | grep -E ':35397 |:50091 '"]
       interval: 5s
       timeout: 3s
       retries: 40
@@ -51,15 +50,98 @@ services:
       - |
         set -euo pipefail
         echo "[autotuner] sweep via HTTP; tuning via connector control socket"
-        send_try(){ host="$1";port="$2";hz="$3"; for p in "FREQ $${hz}\n" "SET FREQ $${hz}\n" "set frequency $${hz}\n" "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n" "FREQ $${hz}\r\n" "SET FREQ $${hz}\r\n" "set frequency $${hz}\r\n" "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\r\n"; do printf '%b' "$$p"|timeout 2 socat - TCP4:$$host:$$port,connect-timeout=2 >/dev/null 2>&1 && return 0; done; return 1; }
+
+        send_try() {
+          host="$1"; port="$2"; hz="$3"
+          for payload in \
+            "FREQ $${hz}\n" \
+            "SET FREQ $${hz}\n" \
+            "set frequency $${hz}\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n" \
+            "FREQ $${hz}\r\n" \
+            "SET FREQ $${hz}\r\n" \
+            "set frequency $${hz}\r\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\r\n"
+          do
+            printf '%b' "$${payload}" | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+          done
+          return 1
+        }
+
         for i in $$(seq 1 90); do ss -lnt | grep -q ':35397 ' && break || sleep 1; done
         echo "[autotuner] control socket: 127.0.0.1:$${CONTROL_PORT}"
+
         while :; do
           resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
           PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
           PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
           if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ] && [ "$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
-            send_try 127.0.0.1 "$${CONTROL_PORT}" "$${PHZ}" && echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)" || echo "[autotuner] send failed"
+            if send_try 127.0.0.1 "$${CONTROL_PORT}" "$${PHZ}"; then
+              echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)"
+            else
+              echo "[autotuner] send failed"
+            fi
           fi
           sleep 60
         done
+
+  sweep-publisher:
+    image: python:3.11-slim
+    profiles: ["sweep"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /mnt/iqdata:/mnt/iqdata:ro
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        pip install --no-cache-dir flask==3.0.3
+        python - <<'PY'
+        from flask import Flask, jsonify
+        from pathlib import Path
+        import csv, time
+
+        app = Flask(__name__)
+        SWEEP_DIR = Path("/mnt/iqdata/sweeps")
+
+        def latest_lite():
+            files = sorted(SWEEP_DIR.glob("sweep_*_lite.csv"))
+            return files[-1] if files else None
+
+        @app.get("/peak")
+        def peak():
+            f = latest_lite()
+            if not f:
+              return jsonify({"ok": False, "error": "no_lite_files"}), 404
+
+            best = None
+            with f.open(newline='') as fh:
+              r = csv.reader(fh)
+              for row in r:
+                if not row: continue
+                if len(row) < 3: continue
+                try:
+                  peak_hz = float(row[-3])
+                  max_db  = float(row[-2])
+                  mean_db = float(row[-1])
+                except Exception:
+                  continue
+                if (best is None) or (max_db > best["max_db"]):
+                  best = {
+                    "peak_hz": round(peak_hz),
+                    "max_db": max_db,
+                    "mean_db": mean_db,
+                    "file": f.name,
+                  }
+
+            if not best:
+              return jsonify({"ok": False, "error": "parse"}), 500
+
+            best["ok"] = True
+            best["time"] = int(time.time())
+            return jsonify(best)
+
+        app.run(host="0.0.0.0", port=8088)
+        PY
