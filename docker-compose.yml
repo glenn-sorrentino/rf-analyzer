@@ -15,17 +15,18 @@ services:
   connector:
     build:
       context: .
-      dockerfile: Dockerfile.connector  # must install: owrx-connector, rtl_tcp_connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
+      dockerfile: Dockerfile.connector  # installs: owrx-connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
     profiles: ["webui"]
     container_name: owrx-connector
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
+    # share loopback with OpenWebRX so 127.0.0.1 works for both
     network_mode: "service:openwebrx"
     restart: unless-stopped
-    entrypoint: ["/usr/bin/rtl_tcp_connector"]
+    entrypoint: ["/usr/bin/soapy_connector"]
     healthcheck:
-      test: ["CMD-SHELL", "ss -lnt | grep -qE ':(50221|35397) '"]
+      test: ["CMD-SHELL", "ss -lnt | grep -qE ':(50091|35397) '"]
       interval: 5s
       timeout: 3s
       retries: 40
@@ -44,27 +45,35 @@ services:
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-      RTL_TCP_PORT: "50221"
+      CONTROL_PORT: "35397"
     command:
       - bash
       - -lc
       - |
         set -euo pipefail
-        echo "[autotuner] sweep via HTTP; tuning via rtl_tcp control (50221)"
+        echo "[autotuner] sweep via HTTP; tuning via OpenWebRX connector control (35397)"
 
-        tune_rtl_tcp() {
-          local hz="$$1"
-          python3 - <<'PY' "$$hz" || return 1
-            import socket, struct, sys
-            hz = int(sys.argv[1])
-            with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-                s.sendall(b"f" + struct.pack("<I", hz))
-            PY
+        send_try() {
+          local host="$$1" port="$$2" hz="$$3"
+          for payload in \
+            "FREQ $${hz}\n" \
+            "SET FREQ $${hz}\n" \
+            "set frequency $${hz}\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n" \
+            "FREQ $${hz}\r\n" \
+            "SET FREQ $${hz}\r\n" \
+            "set frequency $${hz}\r\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\r\n"
+          do
+            printf '%b' "$${payload}" | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+          done
+          return 1
         }
 
+        # wait for web UI and connector ports
         for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
-        for i in $$(seq 1 90); do ss -lnt | grep -q ':50221 ' && break || sleep 1; done
-        echo "[autotuner] rtl_tcp control ready on 127.0.0.1:50221"
+        for i in $$(seq 1 90); do ss -lnt | grep -q ':35397 ' && break || sleep 1; done
+        echo "[autotuner] control socket: 127.0.0.1:$${CONTROL_PORT}"
 
         while :; do
           resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
@@ -74,11 +83,7 @@ services:
           if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
             ok="$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
             if [ "$${ok}" -eq 1 ]; then
-              if tune_rtl_tcp "$${PHZ}"; then
-                echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)"
-              else
-                echo "[autotuner] tune failed"
-              fi
+              send_try 127.0.0.1 "$${CONTROL_PORT}" "$${PHZ}" && echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)" || echo "[autotuner] send failed"
             else
               echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
             fi
