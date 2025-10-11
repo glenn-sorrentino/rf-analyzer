@@ -1,5 +1,6 @@
 FROM debian:bullseye-slim
 ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update -qq \
  && apt-get install -y -qq curl ca-certificates gnupg iproute2 usbutils \
  && install -d -m 0755 /usr/share/keyrings \
@@ -8,5 +9,15 @@ RUN apt-get update -qq \
  && apt-get update -qq \
  && apt-get install -y -qq owrx-connector soapysdr-tools soapysdr0.7-module-hackrf hackrf \
  && rm -rf /var/lib/apt/lists/*
-ENTRYPOINT ["/usr/bin/owrx-connector"]
-CMD ["soapy","--driver=hackrf","--data","0.0.0.0:50091","--control","0.0.0.0:35397"]
+
+# Do NOT hardcode the binary path; resolve it at runtime.
+CMD ["bash","-lc", "\
+set -euo pipefail; \
+BIN=$(command -v owrx-connector || command -v owrx_connector || true); \
+if [ -z \"$BIN\" ]; then echo 'owrx-connector binary not found in PATH' >&2; ls -l /usr/bin /usr/sbin || true; exit 127; fi; \
+echo \"[connector] using $BIN\"; \
+echo '[connector] usb:'; lsusb || true; \
+echo '[connector] hackrf_info:'; hackrf_info || true; \
+echo '[connector] Soapy devices:'; SoapySDRUtil --find || true; \
+exec \"$BIN\" soapy --driver=hackrf --data 0.0.0.0:50091 --control 0.0.0.0:35397 \
+"]
