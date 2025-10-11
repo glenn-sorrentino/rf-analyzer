@@ -12,12 +12,10 @@ services:
     environment:
       OWX_ADMIN_ENABLED: "true"
 
-  # Connector: use the package-provided `soapy_connector` with defaults.
-  # It autodetects HackRF and binds its own data/control ports.
   connector:
     build:
       context: .
-      dockerfile: Dockerfile.connector
+      dockerfile: Dockerfile.connector   # must install: owrx-connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
     profiles: ["webui"]
     container_name: owrx-connector
     privileged: true
@@ -25,27 +23,15 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     network_mode: "service:openwebrx"
     restart: unless-stopped
-    command:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        BIN="$(command -v soapy_connector)"
-        echo "[connector] using $BIN"
-        lsusb || true
-        hackrf_info || true
-        SoapySDRUtil --find || true
-        # start with built-in defaults; unknown CLI flags are rejected by this binary
-        exec "$BIN"
+    # run the package’s binary directly — no env interpolation risk
+    entrypoint: ["/usr/bin/soapy_connector"]
     healthcheck:
-      # mark healthy when the process is up and at least one TCP listener appears
-      test: ["CMD-SHELL","pidof soapy_connector >/dev/null 2>&1 && ss -lnt | awk 'NR>1{exit 0} END{exit (NR==1)}'"]
+      test: ["CMD-SHELL","pidof soapy_connector >/dev/null 2>&1"]
       interval: 5s
       timeout: 3s
       retries: 40
       start_period: 25s
 
-  # Autotuner: probe control port dynamically (no hardcoded CONTROL_PORT)
   autotuner:
     build:
       context: .
@@ -59,7 +45,7 @@ services:
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-      CONTROL_PORT: ""     # leave empty; autotuner will probe
+      CONTROL_PORT: ""   # leave empty; we auto-probe
     command:
       - bash
       - -lc
@@ -68,68 +54,65 @@ services:
         echo "[autotuner] sweep via HTTP; auto-probing connector control socket"
 
         send_try() {
-          local host="$1" port="$2" hz="$3"
+          local host="$$1" port="$$2" hz="$$3"
           for payload in \
-            "FREQ ${hz}\n" \
-            "SET FREQ ${hz}\n" \
-            "set frequency ${hz}\n" \
-            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":${hz}}\n" \
-            "FREQ ${hz}\r\n" \
-            "SET FREQ ${hz}\r\n" \
-            "set frequency ${hz}\r\n" \
-            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":${hz}}\r\n"
+            "FREQ $${hz}\n" \
+            "SET FREQ $${hz}\n" \
+            "set frequency $${hz}\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n" \
+            "FREQ $${hz}\r\n" \
+            "SET FREQ $${hz}\r\n" \
+            "set frequency $${hz}\r\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\r\n"
           do
-            printf '%b' "${payload}" | timeout 2 socat - TCP4:${host}:${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+            printf '%b' "$${payload}" | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
           done
           return 1
         }
 
-        # probe 127.0.0.1 listeners in this netns; try simple text and JSON probes
         probe_port() {
           awk 'NR>1{split($$2,a,":"); ip=a[1]; p=strtonum("0x"a[2]); s=$$4; if(ip=="0100007F" && s=="0A") print p}' /proc/net/tcp \
           | sort -n \
           | grep -Ev '^(22|80|443|8073)$' \
           | while read -r p; do
-              if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:${p},connect-timeout=1 >/dev/null 2>&1; then
-                echo "${p}"; return 0
+              if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:$${p},connect-timeout=1 >/dev/null 2>&1; then
+                echo "$${p}"; return 0
               fi
-              if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:${p},connect-timeout=1 >/dev/null 2>&1; then
-                echo "${p}"; return 0
+              if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$${p},connect-timeout=1 >/dev/null 2>&1; then
+                echo "$${p}"; return 0
               fi
             done
           return 1
         }
 
-        # wait for OpenWebRX UI so we know the stack is up
-        for i in $(seq 1 60); do
-          curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1
-        done
+        for i in $$(seq 1 60); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
 
         HOST=127.0.0.1
-        PORT="${CONTROL_PORT:-}"
-        [ -z "${PORT}" ] && PORT="$(probe_port || true || echo "")"
-        if [ -n "${PORT}" ]; then
-          echo "[autotuner] control socket candidate: ${HOST}:${PORT}"
+        PORT="$${CONTROL_PORT:-}"
+        if [ -z "$${PORT}" ]; then PORT="$$(probe_port || true)"; fi
+        if [ -n "$${PORT}" ]; then
+          echo "[autotuner] control socket candidate: $${HOST}:$${PORT}"
         else
           echo "[autotuner] no control socket yet; will keep probing"
         fi
 
         while :; do
-          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
-          PHZ="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
+          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
 
-          if [ -n "${PHZ}" ] && [ -n "${PDB}" ]; then
-            if [ "$(echo "${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
-              [ -z "${PORT}" ] && PORT="$(probe_port || true || echo "")"
-              if [ -n "${PORT}" ] && send_try "${HOST}" "${PORT}" "${PHZ}"; then
-                echo "[autotuner] tuned ${HOST}:${PORT} -> ${PHZ} Hz (peak ${PDB} dB)"
+          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
+            ok="$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$${ok}" -eq 1 ]; then
+              if [ -z "$${PORT}" ]; then PORT="$$(probe_port || true)"; fi
+              if [ -n "$${PORT}" ] && send_try "$${HOST}" "$${PORT}" "$${PHZ}"; then
+                echo "[autotuner] tuned $${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
               else
                 echo "[autotuner] send failed; re-probing ports"
                 PORT=""
               fi
             else
-              echo "[autotuner] weak peak (${PDB} dB < ${MIN_DB:- -70})"
+              echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
             fi
           else
             echo "[autotuner] waiting for valid sweep JSON"
@@ -168,8 +151,8 @@ services:
             with f.open(newline='') as fh:
               r = csv.reader(fh)
               for row in r:
-                if not row: continue
-                if len(row) < 3: continue
+                if not row or len(row) < 3:
+                  continue
                 try:
                   peak_hz = float(row[-3]); max_db = float(row[-2]); mean_db = float(row[-1])
                 except Exception:
