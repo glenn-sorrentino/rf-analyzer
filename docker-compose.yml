@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   openwebrx:
     image: jketterl/openwebrx-full:latest
@@ -6,7 +8,8 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    ports: ["8073:8073"]
+    ports:
+      - "8073:8073"
     volumes:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
@@ -14,34 +17,23 @@ services:
       OWX_ADMIN_ENABLED: "true"
 
   connector:
-    image: debian:bookworm-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.connector
     profiles: ["webui"]
     container_name: owrx-connector
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
+    # share netns with OpenWebRX so 127.0.0.1 works across services
     network_mode: "service:openwebrx"
     restart: unless-stopped
-    command:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        apt-get update -qq
-        apt-get install -y -qq curl ca-certificates gnupg
-        install -d -m 0755 /usr/share/keyrings
-        curl -fsSL https://repo.openwebrx.de/openwebrx.gpg > /usr/share/keyrings/openwebrx.gpg
-        echo 'deb [signed-by=/usr/share/keyrings/openwebrx.gpg] https://repo.openwebrx.de/debian/ bookworm main' > /etc/apt/sources.list.d/openwebrx.list
-        apt-get update -qq
-        apt-get install -y -qq owrx-connector soapysdr-module-hackrf hackrf iproute2
-        echo "[connector] starting Soapy connector for HackRF: data :50091, control :35397"
-        exec owrx-connector soapy --driver=hackrf --data 0.0.0.0:50091 --control 0.0.0.0:35397
     healthcheck:
       test: ["CMD-SHELL","ss -lnt | grep -q ':35397 '"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 5s
+      start_period: 10s
 
   autotuner:
     build:
@@ -84,19 +76,80 @@ services:
         for i in $$(seq 1 60); do ss -lnt | grep -q ':35397 ' && break || sleep 1; done
         echo "[autotuner] control socket: 127.0.0.1:$${CONTROL_PORT}"
 
-        HOST=127.0.0.1
-        PORT="$${CONTROL_PORT}"
-
         while :; do
           resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
           PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
           PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
           if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ] && [ "$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
-            if send_try "$${HOST}" "$${PORT}" "$${PHZ}"; then
-              echo "[autotuner] tuned $${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
+            if send_try 127.0.0.1 "$${CONTROL_PORT}" "$${PHZ}"; then
+              echo "[autotuner] tuned 127.0.0.1:$${CONTROL_PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
             else
               echo "[autotuner] send failed (no ack from connector)"
             fi
+          else
+            [ -z "$${PHZ}" ] && echo "[autotuner] waiting for valid sweep JSON"
+            [ -n "$${PHZ}" ] && echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
           fi
           sleep 60
         done
+
+  sweep-publisher:
+    image: python:3.11-slim
+    profiles: ["sweep"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /mnt/iqdata:/mnt/iqdata:ro
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        pip install --no-cache-dir flask==3.0.3
+        python - <<'PY'
+        from flask import Flask, jsonify
+        from pathlib import Path
+        import csv, time
+
+        app = Flask(__name__)
+        SWEEP_DIR = Path("/mnt/iqdata/sweeps")
+
+        def latest_lite():
+            files = sorted(SWEEP_DIR.glob("sweep_*_lite.csv"))
+            return files[-1] if files else None
+
+        @app.get("/peak")
+        def peak():
+            f = latest_lite()
+            if not f:
+              return jsonify({"ok": False, "error": "no_lite_files"}), 404
+
+            best = None
+            with f.open(newline='') as fh:
+              r = csv.reader(fh)
+              for row in r:
+                if not row: continue
+                if len(row) < 3: continue
+                try:
+                  peak_hz = float(row[-3])
+                  max_db  = float(row[-2])
+                  mean_db = float(row[-1])
+                except Exception:
+                  continue
+                if (best is None) or (max_db > best["max_db"]):
+                  best = {
+                    "peak_hz": round(peak_hz),
+                    "max_db": max_db,
+                    "mean_db": mean_db,
+                    "file": f.name,
+                  }
+
+            if not best:
+              return jsonify({"ok": False, "error": "parse"}), 500
+
+            best["ok"] = True
+            best["time"] = int(time.time())
+            return jsonify(best)
+
+        app.run(host="0.0.0.0", port=8088)
+        PY
