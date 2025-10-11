@@ -1,16 +1,33 @@
 # Dockerfile.connector
-FROM debian:bullseye-slim
-RUN apt-get update -qq && apt-get install -y -qq \
-    curl ca-certificates gnupg iproute2 usbutils \
-    soapysdr-tools \
-    soapyremote-server \            # alt names on some bases: soapysdr-remote, soapy-remote
-    soapysdr0.7-module-remote \     # alt: soapysdr-module-remote
-    soapysdr0.7-module-hackrf \     # alt: soapysdr-module-hackrf
-    hackrf \
- && rm -rf /var/lib/apt/lists/*
+FROM debian:bookworm-slim
 
-# sanity info at start, then launch SoapySDRServer
-ENTRYPOINT ["/bin/bash","-lc","set -e; \
-  echo '[connector] USB:'; lsusb || true; \
-  echo '[connector] Soapy devices:'; SoapySDRUtil --find || true; \
-  exec SoapySDRServer --bind=127.0.0.1:55132"]
+# Tools + Soapy SDR + HackRF + Soapy **Remote server**
+RUN set -eux; \
+  apt-get update -qq; \
+  apt-get install -y -qq --no-install-recommends \
+    ca-certificates curl gnupg iproute2 usbutils \
+    jq bc python3 socat \
+    soapysdr-tools hackrf; \
+  # --- Soapy Remote **server** (pkg name differs by distro) ---
+  if apt-cache show soapyremote-server >/dev/null 2>&1; then \
+      apt-get install -y -qq soapyremote-server; \
+  elif apt-cache show soapysdr-remote >/dev/null 2>&1; then \
+      apt-get install -y -qq soapysdr-remote; \
+  else \
+      echo "ERROR: no Soapy Remote server package on this base image"; exit 1; \
+  fi; \
+  # --- Remote module (0.8 or 0.7) ---
+  if apt-cache show soapysdr0.8-module-remote >/dev/null 2>&1; then \
+      apt-get install -y -qq soapysdr0.8-module-remote; \
+  elif apt-cache show soapysdr0.7-module-remote >/dev/null 2>&1; then \
+      apt-get install -y -qq soapysdr0.7-module-remote; \
+  fi; \
+  # --- HackRF module (0.8 or 0.7) ---
+  if apt-cache show soapysdr0.8-module-hackrf >/dev/null 2>&1; then \
+      apt-get install -y -qq soapysdr0.8-module-hackrf; \
+  elif apt-cache show soapysdr0.7-module-hackrf >/dev/null 2>&1; then \
+      apt-get install -y -qq soapysdr0.7-module-hackrf; \
+  fi; \
+  rm -rf /var/lib/apt/lists/*; \
+  # sanity check: this must exist
+  command -v SoapySDRServer
