@@ -27,7 +27,7 @@ services:
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-      CONTROL_PORT: "50221"             # port is still 50091, but host will be 127.0.0.1 now
+      CONTROL_PORT: "35397"             # port is still 50091, but host will be 127.0.0.1 now
     command:
       - bash
       - -lc
