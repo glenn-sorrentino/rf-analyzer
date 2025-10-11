@@ -55,11 +55,11 @@ services:
         tune_rtl_tcp() {
           local hz="$$1"
           python3 - <<'PY' "$$hz" || return 1
-          import socket, struct, sys
-          hz = int(sys.argv[1])
-          with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-              s.sendall(b"f" + struct.pack("<I", hz))
-          PY
+            import socket, struct, sys
+            hz = int(sys.argv[1])
+            with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
+                s.sendall(b"f" + struct.pack("<I", hz))
+            PY
         }
 
         for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
