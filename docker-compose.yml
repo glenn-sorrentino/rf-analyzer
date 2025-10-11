@@ -39,8 +39,8 @@ services:
         list_ports() {
           # emits all listening TCP ports owned by soapy_connector in this net ns
           ss -lntp 2>/dev/null \
-            | awk '/soapy_connector/ {print $4}' \
-            | awk -F: '{print $NF}' \
+            | awk '/soapy_connector/ {print $$4}' \
+            | awk -F: '{print $$NF}' \
             | sort -n | uniq
         }
 
