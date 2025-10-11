@@ -71,17 +71,19 @@ services:
         }
 
         probe_port() {
-          awk 'NR>1{split($$2,a,":"); ip=a[1]; p=strtonum("0x"a[2]); s=$$4; if(ip=="0100007F" && s=="0A") print p}' /proc/net/tcp \
-          | sort -n \
-          | grep -Ev '^(22|80|443|8073)$' \
-          | while read -r p; do
-              if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:$${p},connect-timeout=1 >/dev/null 2>&1; then
-                echo "$${p}"; return 0
-              fi
-              if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$${p},connect-timeout=1 >/dev/null 2>&1; then
-                echo "$${p}"; return 0
-              fi
-            done
+          while read -r _ local_hex _ state _; do
+            ip_hex="${local_hex%:*}"; port_hex="${local_hex##*:}"
+            [ "$ip_hex" = "0100007F" ] || continue           # 127.0.0.1
+            [ "$state" = "0A" ] || continue                  # LISTEN
+            p=$((16#$port_hex))                              # hex -> dec
+            case "$p" in 22|80|443|8073) continue;; esac
+            if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:$p,connect-timeout=1 >/dev/null 2>&1; then
+              echo "$p"; return 0
+            fi
+            if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$p,connect-timeout=1 >/dev/null 2>&1; then
+              echo "$p"; return 0
+            fi
+          done < /proc/net/tcp
           return 1
         }
 
