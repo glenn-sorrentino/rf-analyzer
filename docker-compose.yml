@@ -69,7 +69,7 @@ services:
               if send_freq "$$HOST" "$$PORT" "$$PHZ"; then
                 echo "[autotuner] tuned socket:${HOST}:${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
               else
-                echo "[autotuner] socket tune failed on ${HOST}:${PORT}"
+                echo "[autotuner] socket tune failed on $${HOST}:$${PORT}"
               fi
             else
               echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
