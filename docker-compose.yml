@@ -15,7 +15,7 @@ services:
   connector:
     build:
       context: .
-      dockerfile: Dockerfile.connector   # must install: owrx-connector, rtl_tcp_connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
+      dockerfile: Dockerfile.connector  # must install: owrx-connector, rtl_tcp_connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
     profiles: ["webui"]
     container_name: owrx-connector
     privileged: true
@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     entrypoint: ["/usr/bin/rtl_tcp_connector"]
     healthcheck:
-      test: ["CMD-SHELL","ss -lnt | grep -qE ':(50221|35397) '"]
+      test: ["CMD-SHELL", "ss -lnt | grep -qE ':(50221|35397) '"]
       interval: 5s
       timeout: 3s
       retries: 40
@@ -55,11 +55,11 @@ services:
         tune_rtl_tcp() {
           local hz="$$1"
           python3 - <<'PY' "$$hz" || return 1
-import socket, struct, sys
-hz = int(sys.argv[1])
-with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-    s.sendall(b"f" + struct.pack("<I", hz))
-PY
+          import socket, struct, sys
+          hz = int(sys.argv[1])
+          with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
+              s.sendall(b"f" + struct.pack("<I", hz))
+          PY
         }
 
         for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
