@@ -20,12 +20,12 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    # share net ns with OpenWebRX so 127.0.0.1 is common
-    network_mode: "service:openwebrx"
+    network_mode: "service:openwebrx"        # share 127.0.0.1 with OpenWebRX
     depends_on:
       openwebrx:
         condition: service_started
     restart: unless-stopped
+    entrypoint: ["bash","-lc","exec SoapySDRServer --bind 127.0.0.1 --port 55132"]
     healthcheck:
       test: ["CMD-SHELL","ss -lnt | grep -q ':55132 '"]
       interval: 5s
