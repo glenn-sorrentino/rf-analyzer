@@ -12,6 +12,8 @@ services:
     environment:
       OWX_ADMIN_ENABLED: "true"
 
+  # Connector: use the package-provided `soapy_connector` with defaults.
+  # It autodetects HackRF and binds its own data/control ports.
   connector:
     build:
       context: .
@@ -23,13 +25,27 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     network_mode: "service:openwebrx"
     restart: unless-stopped
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        BIN="$(command -v soapy_connector)"
+        echo "[connector] using $BIN"
+        lsusb || true
+        hackrf_info || true
+        SoapySDRUtil --find || true
+        # start with built-in defaults; unknown CLI flags are rejected by this binary
+        exec "$BIN"
     healthcheck:
-      test: ["CMD-SHELL","ss -lnt | grep -E ':35397 |:50091 '"]
+      # mark healthy when the process is up and at least one TCP listener appears
+      test: ["CMD-SHELL","pidof soapy_connector >/dev/null 2>&1 && ss -lnt | awk 'NR>1{exit 0} END{exit (NR==1)}'"]
       interval: 5s
       timeout: 3s
       retries: 40
       start_period: 25s
 
+  # Autotuner: probe control port dynamically (no hardcoded CONTROL_PORT)
   autotuner:
     build:
       context: .
@@ -43,44 +59,80 @@ services:
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-      CONTROL_PORT: "35397"
+      CONTROL_PORT: ""     # leave empty; autotuner will probe
     command:
       - bash
       - -lc
       - |
         set -euo pipefail
-        echo "[autotuner] sweep via HTTP; tuning via connector control socket"
+        echo "[autotuner] sweep via HTTP; auto-probing connector control socket"
 
         send_try() {
-          host="$1"; port="$2"; hz="$3"
+          local host="$1" port="$2" hz="$3"
           for payload in \
-            "FREQ $${hz}\n" \
-            "SET FREQ $${hz}\n" \
-            "set frequency $${hz}\n" \
-            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n" \
-            "FREQ $${hz}\r\n" \
-            "SET FREQ $${hz}\r\n" \
-            "set frequency $${hz}\r\n" \
-            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\r\n"
+            "FREQ ${hz}\n" \
+            "SET FREQ ${hz}\n" \
+            "set frequency ${hz}\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":${hz}}\n" \
+            "FREQ ${hz}\r\n" \
+            "SET FREQ ${hz}\r\n" \
+            "set frequency ${hz}\r\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":${hz}}\r\n"
           do
-            printf '%b' "$${payload}" | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+            printf '%b' "${payload}" | timeout 2 socat - TCP4:${host}:${port},connect-timeout=2 >/dev/null 2>&1 && return 0
           done
           return 1
         }
 
-        for i in $$(seq 1 90); do ss -lnt | grep -q ':35397 ' && break || sleep 1; done
-        echo "[autotuner] control socket: 127.0.0.1:$${CONTROL_PORT}"
+        # probe 127.0.0.1 listeners in this netns; try simple text and JSON probes
+        probe_port() {
+          awk 'NR>1{split($$2,a,":"); ip=a[1]; p=strtonum("0x"a[2]); s=$$4; if(ip=="0100007F" && s=="0A") print p}' /proc/net/tcp \
+          | sort -n \
+          | grep -Ev '^(22|80|443|8073)$' \
+          | while read -r p; do
+              if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:${p},connect-timeout=1 >/dev/null 2>&1; then
+                echo "${p}"; return 0
+              fi
+              if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:${p},connect-timeout=1 >/dev/null 2>&1; then
+                echo "${p}"; return 0
+              fi
+            done
+          return 1
+        }
+
+        # wait for OpenWebRX UI so we know the stack is up
+        for i in $(seq 1 60); do
+          curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1
+        done
+
+        HOST=127.0.0.1
+        PORT="${CONTROL_PORT:-}"
+        [ -z "${PORT}" ] && PORT="$(probe_port || true || echo "")"
+        if [ -n "${PORT}" ]; then
+          echo "[autotuner] control socket candidate: ${HOST}:${PORT}"
+        else
+          echo "[autotuner] no control socket yet; will keep probing"
+        fi
 
         while :; do
-          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
-          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
-          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ] && [ "$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
-            if send_try 127.0.0.1 "$${CONTROL_PORT}" "$${PHZ}"; then
-              echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)"
+          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
+          PHZ="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
+
+          if [ -n "${PHZ}" ] && [ -n "${PDB}" ]; then
+            if [ "$(echo "${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
+              [ -z "${PORT}" ] && PORT="$(probe_port || true || echo "")"
+              if [ -n "${PORT}" ] && send_try "${HOST}" "${PORT}" "${PHZ}"; then
+                echo "[autotuner] tuned ${HOST}:${PORT} -> ${PHZ} Hz (peak ${PDB} dB)"
+              else
+                echo "[autotuner] send failed; re-probing ports"
+                PORT=""
+              fi
             else
-              echo "[autotuner] send failed"
+              echo "[autotuner] weak peak (${PDB} dB < ${MIN_DB:- -70})"
             fi
+          else
+            echo "[autotuner] waiting for valid sweep JSON"
           fi
           sleep 60
         done
@@ -102,20 +154,16 @@ services:
         from flask import Flask, jsonify
         from pathlib import Path
         import csv, time
-
         app = Flask(__name__)
         SWEEP_DIR = Path("/mnt/iqdata/sweeps")
-
         def latest_lite():
             files = sorted(SWEEP_DIR.glob("sweep_*_lite.csv"))
             return files[-1] if files else None
-
         @app.get("/peak")
         def peak():
             f = latest_lite()
             if not f:
               return jsonify({"ok": False, "error": "no_lite_files"}), 404
-
             best = None
             with f.open(newline='') as fh:
               r = csv.reader(fh)
@@ -123,25 +171,14 @@ services:
                 if not row: continue
                 if len(row) < 3: continue
                 try:
-                  peak_hz = float(row[-3])
-                  max_db  = float(row[-2])
-                  mean_db = float(row[-1])
+                  peak_hz = float(row[-3]); max_db = float(row[-2]); mean_db = float(row[-1])
                 except Exception:
                   continue
                 if (best is None) or (max_db > best["max_db"]):
-                  best = {
-                    "peak_hz": round(peak_hz),
-                    "max_db": max_db,
-                    "mean_db": mean_db,
-                    "file": f.name,
-                  }
-
+                  best = {"peak_hz": round(peak_hz), "max_db": max_db, "mean_db": mean_db, "file": f.name}
             if not best:
               return jsonify({"ok": False, "error": "parse"}), 500
-
-            best["ok"] = True
-            best["time"] = int(time.time())
+            best["ok"] = True; best["time"] = int(time.time())
             return jsonify(best)
-
         app.run(host="0.0.0.0", port=8088)
         PY
