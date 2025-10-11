@@ -33,9 +33,18 @@ services:
       - -lc
       - |
         set -e
-        BIN=SoapySDRServer
+        # find the server binary (name varies by distro)
+        BIN="$(command -v SoapySDRServer || true)"
+        [ -z "$BIN" ] && BIN="$(command -v soapy_remote_server || true)"
+        if [ -z "$BIN" ]; then
+          echo "[connector] ERROR: Soapy SDR server binary not found."
+          echo "Expected one of: SoapySDRServer / soapy_remote_server"
+          echo "Path contains:"; echo "$PATH"
+          echo "ls /usr/bin:"; ls -l /usr/bin || true
+          sleep 3600
+        fi
         echo "[connector] starting $BIN without mDNS on 127.0.0.1:55132"
-        # Try modern flag first; if that binary doesn't know it, fall back:
+        # try modern flags first, fall back to older ones
         exec "$BIN" --bind=tcp://127.0.0.1:55132 --no-dnssd || \
         exec "$BIN" --bind 127.0.0.1 --port 55132 --disableMDNS
     healthcheck:
