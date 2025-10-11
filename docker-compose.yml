@@ -25,13 +25,17 @@ services:
       openwebrx:
         condition: service_started
     restart: unless-stopped
+    environment:
+      SOAPY_SDR_REMOTE_DISABLE_DNSSD: "1"
+      SOAPY_REMOTE_DISABLE_MDNS: "1"
     entrypoint:
       - bash
       - -lc
       - |
         set -e
         BIN=SoapySDRServer
-        # Try modern syntax first, then older one if the first returns an error
+        echo "[connector] starting $BIN without mDNS on 127.0.0.1:55132"
+        # Try modern flag first; if that binary doesn't know it, fall back:
         exec "$BIN" --bind=tcp://127.0.0.1:55132 --no-dnssd || \
         exec "$BIN" --bind 127.0.0.1 --port 55132 --disableMDNS
     healthcheck:
