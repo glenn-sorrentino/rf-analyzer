@@ -1,7 +1,9 @@
 # Dockerfile.autotuner
 FROM debian:stable-slim
 ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update -qq && \
-    apt-get install -y -qq curl jq bc socat procps iproute2 ss ca-certificates && \
+    apt-get install -y -qq iproute2 socat python3 curl jq bc ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
 CMD ["bash", "-lc", "sleep infinity"]
