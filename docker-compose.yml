@@ -33,14 +33,19 @@ services:
       - -lc
       - |
         set -euo pipefail
-        echo "[autotuner] HTTP mode for sweep; socket control for tune"
+        echo "[autotuner] HTTP mode for sweep; socket control for tune (auto-discover ports)"
         HOST="127.0.0.1"
-        PORT="$${CONTROL_PORT:-50091}"
-        echo "[autotuner] using control $${HOST}:$${PORT}"
+
+        list_ports() {
+          # emits all listening TCP ports owned by soapy_connector in this net ns
+          ss -lntp 2>/dev/null \
+            | awk '/soapy_connector/ {print $4}' \
+            | awk -F: '{print $NF}' \
+            | sort -n | uniq
+        }
 
         send_freq() {
           local host="$$1" port="$$2" hz="$$3"
-          # Try multiple dialects; first that works wins.
           for payload in \
             "FREQ $${hz}" \
             "SET FREQ $${hz}" \
@@ -53,8 +58,8 @@ services:
           return 1
         }
 
-        # simple wait for OpenWebRX UI to be up (same net ns)
-        for i in $$(seq 1 30); do
+        # wait for OWX UI to be up (same net ns)
+        for i in $(seq 1 30); do
           curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 2
         done
 
@@ -63,21 +68,26 @@ services:
           PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
           PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
 
-          if [ -n "$$PHZ" ] && [ -n "$$PDB" ]; then
-            ok="$$(echo "$$PDB > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "$$ok" -eq 1 ]; then
-              if send_freq "$$HOST" "$$PORT" "$$PHZ"; then
-                echo "[autotuner] tuned socket:$${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
-              else
-                echo "[autotuner] socket tune failed on $${HOST}:$${PORT}"
-              fi
+          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
+            ok="$$(echo "$${PDB} > $${MIN_DB:--70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$${ok}" -eq 1 ]; then
+              tried=0
+              for PORT in $$(list_ports); do
+                tried=1
+                if send_freq "$${HOST}" "$${PORT}" "$${PHZ}"; then
+                  echo "[autotuner] tuned socket:$${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
+                  break
+                fi
+              done
+              [ "$${tried}" -eq 0 ] && echo "[autotuner] no soapy_connector control listeners found"
+              [ "$${tried}" -eq 1 ] || true
             else
-              echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
+              echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:--70})"
             fi
           else
             echo "[autotuner] waiting for valid sweep JSON"
           fi
-          sleep 60
+          sleep 30
         done
 
   sweep-publisher:
