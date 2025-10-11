@@ -4,8 +4,7 @@ services:
     profiles: ["webui"]
     container_name: openwebrx
     privileged: true
-    ports:
-      - "8073:8073"
+    ports: ["8073:8073"]
     volumes:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
@@ -15,7 +14,8 @@ services:
   connector:
     build:
       context: .
-      dockerfile: Dockerfile.connector   # must install: owrx-connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
+    # Dockerfile.connector must install: owrx-connector, soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
+      dockerfile: Dockerfile.connector
     profiles: ["webui"]
     container_name: owrx-connector
     privileged: true
@@ -23,7 +23,6 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     network_mode: "host"
     restart: unless-stopped
-    # run the package’s binary directly — no env interpolation risk
     entrypoint: ["/usr/bin/soapy_connector"]
     healthcheck:
       test: ["CMD-SHELL","pidof soapy_connector >/dev/null 2>&1"]
@@ -72,16 +71,16 @@ services:
 
         probe_port() {
           while read -r _ local_hex _ state _; do
-            ip_hex="${local_hex%:*}"; port_hex="${local_hex##*:}"
-            [ "$ip_hex" = "0100007F" ] || continue           # 127.0.0.1
-            [ "$state" = "0A" ] || continue                  # LISTEN
-            p=$((16#$port_hex))                              # hex -> dec
-            case "$p" in 22|80|443|8073) continue;; esac
-            if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:$p,connect-timeout=1 >/dev/null 2>&1; then
-              echo "$p"; return 0
+            ip_hex="$${local_hex%:*}"; port_hex="$${local_hex##*:}"
+            [ "$$ip_hex" = "0100007F" ] || continue           # 127.0.0.1
+            [ "$$state" = "0A" ] || continue                  # LISTEN
+            p=$$((16#$${port_hex}))                           # hex -> dec (no strtonum)
+            case "$$p" in 22|80|443|8073) continue;; esac
+            if printf "FREQ 100000000\n" | timeout 1 socat - TCP4:127.0.0.1:$$p,connect-timeout=1 >/dev/null 2>&1; then
+              echo "$$p"; return 0
             fi
-            if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$p,connect-timeout=1 >/dev/null 2>&1; then
-              echo "$p"; return 0
+            if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$$p,connect-timeout=1 >/dev/null 2>&1; then
+              echo "$$p"; return 0
             fi
           done < /proc/net/tcp
           return 1
