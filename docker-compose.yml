@@ -21,10 +21,9 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    # share loopback with OpenWebRX so 127.0.0.1 works for both
     network_mode: "service:openwebrx"
     restart: unless-stopped
-    entrypoint: ["/usr/bin/soapy_connector"]
+    entrypoint: ["/usr/bin/owrx-connector","hackrf","--data","0.0.0.0:50091","--control","0.0.0.0:35397"]
     healthcheck:
       test: ["CMD-SHELL", "ss -lnt | grep -qE ':(50091|35397) '"]
       interval: 5s
@@ -70,7 +69,6 @@ services:
           return 1
         }
 
-        # wait for web UI and connector ports
         for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
         for i in $$(seq 1 90); do ss -lnt | grep -q ':35397 ' && break || sleep 1; done
         echo "[autotuner] control socket: 127.0.0.1:$${CONTROL_PORT}"
