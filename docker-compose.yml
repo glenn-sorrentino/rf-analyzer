@@ -14,6 +14,26 @@ services:
     environment:
       OWX_ADMIN_ENABLED: "true"
 
+  connector:
+    image: jketterl/openwebrx-full:latest
+    profiles: ["webui"]
+    container_name: owrx-connector
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    depends_on:
+      openwebrx:
+        condition: service_started
+    network_mode: "service:openwebrx"
+    restart: unless-stopped
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        echo "[connector] starting HackRF connector with control + data sockets"
+        exec owrx-connector hackrf --data 0.0.0.0:50091 --control 0.0.0.0:35397
+
   autotuner:
     build:
       context: .
@@ -22,28 +42,61 @@ services:
     depends_on:
       openwebrx:
         condition: service_started
+      connector:
+        condition: service_started
     network_mode: "service:openwebrx"
     restart: unless-stopped
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-      CONTROL_PORT: ""
+      CONTROL_PORT: "35397"
     command:
       - bash
       - -lc
       - |
         set -euo pipefail
-        echo "[autotuner] sweep via HTTP; tuning disabled (no control socket present)"
+        echo "[autotuner] sweep via HTTP; tuning via connector control socket"
+
+        send_try() {
+          host="$1"; port="$2"; hz="$3"
+          for payload in \
+            "FREQ $${hz}\n" \
+            "SET FREQ $${hz}\n" \
+            "set frequency $${hz}\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n" \
+            "FREQ $${hz}\r\n" \
+            "SET FREQ $${hz}\r\n" \
+            "set frequency $${hz}\r\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\r\n"
+          do
+            printf '%b' "$${payload}" | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+          done
+          return 1
+        }
+
+        # wait for UI and control socket
         for i in $$(seq 1 30); do
           curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 2
         done
+        for i in $$(seq 1 30); do
+          timeout 1 bash -lc '>/dev/tcp/127.0.0.1/'"$${CONTROL_PORT}" && break || sleep 1
+        done
+        echo "[autotuner] control socket: 127.0.0.1:$${CONTROL_PORT}"
+
+        HOST=127.0.0.1
+        PORT="$${CONTROL_PORT}"
+
         while :; do
           resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
           PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
           PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
           if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
             if [ "$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
-              echo "[autotuner] candidate frequency $${PHZ} Hz (peak $${PDB} dB)"
+              if send_try "$${HOST}" "$${PORT}" "$${PHZ}"; then
+                echo "[autotuner] tuned $${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
+              else
+                echo "[autotuner] send failed (no ack from connector)"
+              fi
             else
               echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
             fi
