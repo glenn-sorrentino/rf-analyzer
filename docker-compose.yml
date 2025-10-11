@@ -27,28 +27,56 @@ services:
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
+      CONTROL_PORT: "50091"   # from your OWX logs
     command:
       - bash
       - -lc
       - |
         set -euo pipefail
-        for i in $(seq 1 30); do
-          openwebrx-admin device list >/dev/null 2>&1 && break || sleep 2
-        done
+        echo "[autotuner] HTTP mode for sweep; socket control for tune"
+        PORT="$${CONTROL_PORT:-}"
+
+        # function to try sending frequency to soapy_connector control socket
+        send_freq() {
+          local host="127.0.0.1" port="$1" hz="$2"
+          for payload in \
+            "FREQ $${hz}" \
+            "SET FREQ $${hz}" \
+            "f $${hz}" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}"
+          do
+            printf '%s\n' "$${payload}" \
+              | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+          done
+          return 1
+        }
+
+        # if no hint given, we could auto-discover here, but you already have 50091
+        if [ -z "$$PORT" ]; then
+          PORT=50091
+        fi
+        echo "[autotuner] using control port $$PORT"
+
         while :; do
-          resp="$(curl -fsSL "$SWEEP_URL" || true)"
-          PHZ="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
-          if [ -n "$PHZ" ] && [ -n "$PDB" ]; then
-            ok="$(echo "$PDB > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "$ok" -eq 1 ]; then
-              RXID="$(openwebrx-admin receiver list -j | jq -r '.[0].id // empty')"
-              if [ -n "$RXID" ]; then
-                openwebrx-admin receiver tune "$RXID" "$PHZ" && \
-                  echo "[autotuner] tuned via CLI -> $PHZ Hz ($PDB dB)"
+          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
+          PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
+
+          if [ -n "$$PHZ" ] && [ -n "$$PDB" ]; then
+            ok="$$(echo "$$PDB > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$$ok" -eq 1 ]; then
+              if send_freq "$$PORT" "$$PHZ"; then
+                echo "[autotuner] tuned socket:$$PORT -> $$PHZ Hz (peak $$PDB dB)"
+              else
+                echo "[autotuner] socket tune failed on $$PORT"
               fi
+            else
+              echo "[autotuner] weak peak ($$PDB dB < $${MIN_DB:- -70})"
             fi
+          else
+            echo "[autotuner] waiting for valid sweep JSON"
           fi
+
           sleep 60
         done
 
