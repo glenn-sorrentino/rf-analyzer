@@ -14,27 +14,24 @@ services:
   connector:
     build:
       context: .
-      dockerfile: Dockerfile.connector   # installs: soapysdr-tools, soapysdr0.7-module-hackrf, hackrf
+      dockerfile: Dockerfile.connector
     profiles: ["webui"]
     container_name: owrx-connector
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    network_mode: "service:openwebrx"     # share loopback with OpenWebRX
+    # share net ns with OpenWebRX so 127.0.0.1 is common
+    network_mode: "service:openwebrx"
+    depends_on:
+      openwebrx:
+        condition: service_started
     restart: unless-stopped
-    entrypoint:
-      - bash
-      - -lc
-      - |
-        set -e
-        # SoapyRemote on loopback so OpenWebRX can reach it at 127.0.0.1:55132
-        exec SoapySDRServer --bind="127.0.0.1:55132" -d driver=hackrf
     healthcheck:
       test: ["CMD-SHELL","ss -lnt | grep -q ':55132 '"]
       interval: 5s
       timeout: 3s
       retries: 40
-      start_period: 20s
+      start_period: 25s
 
   autotuner:
     build:
