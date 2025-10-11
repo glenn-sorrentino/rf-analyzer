@@ -1,11 +1,12 @@
 FROM debian:bullseye-slim
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq \
- && apt-get install -y -qq curl ca-certificates gnupg iproute2 \
+ && apt-get install -y -qq curl ca-certificates gnupg iproute2 usbutils \
  && install -d -m 0755 /usr/share/keyrings \
  && curl -fsSL https://repo.openwebrx.de/openwebrx.gpg > /usr/share/keyrings/openwebrx.gpg \
  && echo 'deb [signed-by=/usr/share/keyrings/openwebrx.gpg] https://repo.openwebrx.de/debian/ bullseye main' > /etc/apt/sources.list.d/openwebrx.list \
  && apt-get update -qq \
- && apt-get install -y -qq owrx-connector soapysdr0.7-module-hackrf hackrf \
+ && apt-get install -y -qq owrx-connector soapysdr-tools soapysdr0.7-module-hackrf hackrf \
  && rm -rf /var/lib/apt/lists/*
-CMD ["bash","-lc","exec owrx-connector soapy --driver=hackrf --data 0.0.0.0:50091 --control 0.0.0.0:35397"]
+ENTRYPOINT ["/usr/bin/owrx-connector"]
+CMD ["soapy","--driver=hackrf","--data","0.0.0.0:50091","--control","0.0.0.0:35397"]
