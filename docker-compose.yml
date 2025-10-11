@@ -36,69 +36,63 @@ services:
         echo "[autotuner] sweep via HTTP; tuning via socket (auto-probe)"
 
         send_try() {
-          local host="$1" port="$2" hz="$3"
+          local host="$$1" port="$$2" hz="$$3"
           for payload in \
-            "FREQ ${hz}\n" \
-            "SET FREQ ${hz}\n" \
-            "set frequency ${hz}\n" \
-            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":${hz}}\n"
+            "FREQ $${hz}\n" \
+            "SET FREQ $${hz}\n" \
+            "set frequency $${hz}\n" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}\n"
           do
-            printf '%s' "$payload" | timeout 2 socat - TCP4:${host}:${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+            printf '%s' "$${payload}" | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
           done
           return 1
         }
 
         probe_port() {
-          # list all localhost TCP listeners except obvious non-candidates
-          local ps ports
-          ports="$(ss -lnt | awk '/127\.0\.0\.1:/ {print $4}' | awk -F: '{print $NF}' | sort -n | uniq \
-                  | grep -Ev '^(22|80|443|8073)$' || true)"
-          for p in $ports; do
-            # quick “does anything accept a control payload?” poke at a harmless freq
-            if printf 'FREQ 100000000\n' | timeout 1 socat - TCP4:127.0.0.1:$p,connect-timeout=1 >/dev/null 2>&1; then
-              echo "$p"; return 0
+          ports="$(ss -lnt | awk '/127\\.0\\.0\\.1:/ {print $$4}' | awk -F: '{print $$NF}' | sort -n | uniq | grep -Ev '^(22|80|443|8073)$' || true)"
+          for p in $${ports}; do
+            if printf 'FREQ 100000000\n' | timeout 1 socat - TCP4:127.0.0.1:$${p},connect-timeout=1 >/dev/null 2>&1; then
+              echo "$${p}"; return 0
             fi
-            if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$p,connect-timeout=1 >/dev/null 2>&1; then
-              echo "$p"; return 0
+            if printf '{"cmd":"nop"}\n' | timeout 1 socat - TCP4:127.0.0.1:$${p},connect-timeout=1 >/dev/null 2>&1; then
+              echo "$${p}"; return 0
             fi
           done
           return 1
         }
 
-        # wait for the UI
-        for i in $(seq 1 30); do
+        for i in $$(seq 1 30); do
           curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 2
         done
 
         HOST=127.0.0.1
-        PORT="${CONTROL_PORT:-}"
-        if [ -z "$PORT" ]; then
-          PORT="$(probe_port || true)"
+        PORT="$${CONTROL_PORT:-}"
+        if [ -z "$${PORT}" ]; then
+          PORT="$$(probe_port || true)"
         fi
-        if [ -n "$PORT" ]; then
-          echo "[autotuner] control socket: ${HOST}:${PORT}"
+        if [ -n "$${PORT}" ]; then
+          echo "[autotuner] control socket: $${HOST}:$${PORT}"
         else
           echo "[autotuner] no control socket yet; will retry as needed"
         fi
 
         while :; do
-          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
-          PHZ="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
+          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
 
-          if [ -n "$PHZ" ] && [ -n "$PDB" ]; then
-            ok="$(echo "$PDB > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "$ok" -eq 1 ]; then
-              # make sure we have a working port
-              if [ -z "$PORT" ]; then PORT="$(probe_port || true)"; fi
-              if [ -n "$PORT" ] && send_try "$HOST" "$PORT" "$PHZ"; then
-                echo "[autotuner] tuned ${HOST}:${PORT} -> ${PHZ} Hz (peak ${PDB} dB)"
+          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
+            ok="$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$${ok}" -eq 1 ]; then
+              if [ -z "$${PORT}" ]; then PORT="$$(probe_port || true)"; fi
+              if [ -n "$${PORT}" ] && send_try "$${HOST}" "$${PORT}" "$${PHZ}"; then
+                echo "[autotuner] tuned $${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
               else
                 echo "[autotuner] send failed; re-probing ports"
                 PORT=""
               fi
             else
-              echo "[autotuner] weak peak (${PDB} dB < ${MIN_DB:- -70})"
+              echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
             fi
           else
             echo "[autotuner] waiting for valid sweep JSON"
