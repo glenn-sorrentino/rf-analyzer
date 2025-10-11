@@ -25,7 +25,7 @@ services:
       openwebrx:
         condition: service_started
     restart: unless-stopped
-    entrypoint: ["bash","-lc","exec SoapySDRServer --bind 127.0.0.1 --port 55132"]
+    entrypoint: ["bash","-lc","exec SoapySDRServer --bind 127.0.0.1 --port 55132 --disableMDNS"]
     healthcheck:
       test: ["CMD-SHELL","ss -lnt | grep -q ':55132 '"]
       interval: 5s
