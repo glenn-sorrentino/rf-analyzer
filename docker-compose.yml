@@ -35,44 +35,44 @@ services:
         set -euo pipefail
         echo "[autotuner] HTTP mode for sweep; socket control for tune"
         HOST="127.0.0.1"
-        PORT="${CONTROL_PORT:-50091}"
-        echo "[autotuner] using control ${HOST}:${PORT}"
+        PORT="$${CONTROL_PORT:-50091}"
+        echo "[autotuner] using control $${HOST}:$${PORT}"
 
         send_freq() {
-          local host="$1" port="$2" hz="$3"
+          local host="$$1" port="$$2" hz="$$3"
           # Try multiple dialects; first that works wins.
           for payload in \
-            "FREQ ${hz}" \
-            "SET FREQ ${hz}" \
-            "f ${hz}" \
-            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":${hz}}"
+            "FREQ $${hz}" \
+            "SET FREQ $${hz}" \
+            "f $${hz}" \
+            "{\"cmd\":\"set\",\"key\":\"frequency\",\"value\":$${hz}}"
           do
-            printf '%s\n' "$payload" \
-              | timeout 2 socat - TCP4:${host}:${port},connect-timeout=2 >/dev/null 2>&1 && return 0
+            printf '%s\n' "$$payload" \
+              | timeout 2 socat - TCP4:$${host}:$${port},connect-timeout=2 >/dev/null 2>&1 && return 0
           done
           return 1
         }
 
         # simple wait for OpenWebRX UI to be up (same net ns)
-        for i in $(seq 1 30); do
+        for i in $$(seq 1 30); do
           curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 2
         done
 
         while :; do
-          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
-          PHZ="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$(printf "%s" "$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
+          PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
 
-          if [ -n "$PHZ" ] && [ -n "$PDB" ]; then
-            ok="$(echo "$PDB > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "$ok" -eq 1 ]; then
-              if send_freq "$HOST" "$PORT" "$PHZ"; then
-                echo "[autotuner] tuned socket:${HOST}:${PORT} -> ${PHZ} Hz (peak ${PDB} dB)"
+          if [ -n "$$PHZ" ] && [ -n "$$PDB" ]; then
+            ok="$(echo "$$PDB > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$$ok" -eq 1 ]; then
+              if send_freq "$$HOST" "$$PORT" "$$PHZ"; then
+                echo "[autotuner] tuned socket:${HOST}:${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
               else
                 echo "[autotuner] socket tune failed on ${HOST}:${PORT}"
               fi
             else
-              echo "[autotuner] weak peak (${PDB} dB < ${MIN_DB:- -70})"
+              echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
             fi
           else
             echo "[autotuner] waiting for valid sweep JSON"
