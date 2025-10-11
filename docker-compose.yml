@@ -67,7 +67,7 @@ services:
             ok="$$(echo "$$PDB > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
             if [ "$$ok" -eq 1 ]; then
               if send_freq "$$HOST" "$$PORT" "$$PHZ"; then
-                echo "[autotuner] tuned socket:${HOST}:${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
+                echo "[autotuner] tuned socket:$${HOST}:$${PORT} -> $${PHZ} Hz (peak $${PDB} dB)"
               else
                 echo "[autotuner] socket tune failed on $${HOST}:$${PORT}"
               fi
