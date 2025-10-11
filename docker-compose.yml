@@ -41,15 +41,15 @@ services:
         done
 
         while :; do
-          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
-          PHZ="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
+          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
 
-          if [ -n "${PHZ}" ] && [ -n "${PDB}" ]; then
-            if [ "$(echo "${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
-              echo "[autotuner] candidate frequency ${PHZ} Hz (peak ${PDB} dB)"
+          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
+            if [ "$$(echo "$${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
+              echo "[autotuner] candidate frequency $${PHZ} Hz (peak $${PDB} dB)"
             else
-              echo "[autotuner] weak peak (${PDB} dB < ${MIN_DB:- -70})"
+              echo "[autotuner] weak peak ($${PDB} dB < $${MIN_DB:- -70})"
             fi
           else
             echo "[autotuner] waiting for valid sweep JSON"
