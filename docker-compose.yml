@@ -4,14 +4,14 @@ services:
     profiles: ["webui"]
     container_name: openwebrx
     privileged: true
-    ports: ["8073:8073"]
+    ports:
+      - "8073:8073"
     volumes:
       - ./openwebrx_data:/var/lib/openwebrx
     restart: unless-stopped
     environment:
       OWX_ADMIN_ENABLED: "true"
 
-  # Expose rtl_tcp-style ports so OpenWebRX and autotuner can control tuning.
   connector:
     build:
       context: .
@@ -21,7 +21,6 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    # Share loopback with OpenWebRX so 127.0.0.1 works in both containers.
     network_mode: "service:openwebrx"
     restart: unless-stopped
     entrypoint: ["/usr/bin/rtl_tcp_connector"]
@@ -45,7 +44,7 @@ services:
     environment:
       SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
-      RTL_TCP_PORT: "50221"        # binary control port
+      RTL_TCP_PORT: "50221"
     command:
       - bash
       - -lc
@@ -63,7 +62,6 @@ with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
 PY
         }
 
-        # wait for OpenWebRX and rtl_tcp port
         for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
         for i in $$(seq 1 90); do ss -lnt | grep -q ':50221 ' && break || sleep 1; done
         echo "[autotuner] rtl_tcp control ready on 127.0.0.1:50221"
