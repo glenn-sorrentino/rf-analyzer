@@ -30,16 +30,12 @@ services:
       - -lc
       - |
         set -e
-        # Try both flag spellings; some builds want --disable-dns-sd
-        exec SoapySDRServer \
-          --bind 127.0.0.1 \
-          --port 55132 \
-          --disableMDNS || exec SoapySDRServer \
-          --bind 127.0.0.1 \
-          --port 55132 \
-          --disable-dns-sd
+        BIN=SoapySDRServer
+        # Try modern syntax first, then older one if the first returns an error
+        exec "$BIN" --bind=tcp://127.0.0.1:55132 --no-dnssd || \
+        exec "$BIN" --bind 127.0.0.1 --port 55132 --disableMDNS
     healthcheck:
-      test: ["CMD-SHELL","ss -lnt | grep -q ':55132 '"]
+      test: ["CMD-SHELL","ss -ltn | grep -q ':55132 '"]
       interval: 5s
       timeout: 3s
       retries: 40
