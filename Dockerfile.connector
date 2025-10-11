@@ -1,13 +1,12 @@
 # Dockerfile.connector
 FROM debian:bullseye-slim
-
-RUN apt-get update -qq \
- && apt-get install -y -qq \
-      curl ca-certificates gnupg iproute2 usbutils \
-      soapysdr-tools \
-      soapysdr0.7-module-remote \
-      soapysdr0.7-module-hackrf \
-      hackrf \
+RUN apt-get update -qq && apt-get install -y -qq \
+    curl ca-certificates gnupg iproute2 usbutils \
+    soapysdr-tools \
+    soapyremote-server \            # alt names on some bases: soapysdr-remote, soapy-remote
+    soapysdr0.7-module-remote \     # alt: soapysdr-module-remote
+    soapysdr0.7-module-hackrf \     # alt: soapysdr-module-hackrf
+    hackrf \
  && rm -rf /var/lib/apt/lists/*
 
 # sanity info at start, then launch SoapySDRServer
