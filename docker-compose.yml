@@ -85,14 +85,7 @@ services:
 
         tune_rtl_tcp() {
           local hz="$$1"
-          python3 - <<'PY' "$$hz" || return 1
-            import socket, struct, sys
-            hz = int(sys.argv[1])
-            payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
-            with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-                s.sendall(payload)
-            print("ok")
-            PY
+          python3 -c 'import sys,struct,socket; hz=int(sys.argv[1]); s=socket.create_connection(("127.0.0.1",50221),timeout=2); s.sendall(struct.pack("<BI",1,hz)); s.close(); print("ok")' "$$hz" || return 1
         }
 
         # wait for OpenWebRX UI
@@ -108,13 +101,13 @@ services:
 
         while :; do
           resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
-          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
-          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
-            ok="$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "$${ok}" -eq 1 ]; then
-              tune_rtl_tcp "$${PHZ}" >/dev/null 2>&1 && \
-                echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)" || \
+          PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          if [ -n "$$PHZ" ] && [ -n "$$PDB" ]; then
+            ok="$$(echo "$$PDB > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$$ok" -eq 1 ]; then
+              tune_rtl_tcp "$$PHZ" >/dev/null 2>&1 && \
+                echo "[autotuner] tuned -> $$PHZ Hz (peak $$PDB dB)" || \
                 echo "[autotuner] tune failed"
             fi
           fi
