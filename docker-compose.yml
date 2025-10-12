@@ -71,8 +71,8 @@ services:
         echo "[autotuner] sweep via HTTP; tuning via rtl_tcp binary on 127.0.0.1:50221"
 
         tune_rtl_tcp() {
-          local hz="$1"
-          python3 - <<'PY' "$hz" || return 1
+          local hz="$$1"
+          python3 - <<'PY' "$$hz" || return 1
             import socket, struct, sys
             hz = int(sys.argv[1])
             # 0x01 = Set frequency (uint32 little endian)
@@ -84,18 +84,18 @@ services:
         }
 
         # wait for UI
-        for i in $(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
+        for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
         # wait for rtl_tcp listener (enabled in UI below)
-        for i in $(seq 1 180); do ss -lnt | grep -q ':50221 ' && break || sleep 1; done
+        for i in $$(seq 1 180); do ss -lnt | grep -q ':50221 ' && break || sleep 1; done
         echo "[autotuner] rtl_tcp control ready on 127.0.0.1:50221"
 
         while :; do
-          resp="$(curl -fsSL "$${SWEEP_URL}" || true)"
-          PHZ="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
+          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
           if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
-            ok="$(echo "$${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "${ok}" -eq 1 ]; then
+            ok="$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "$${ok}" -eq 1 ]; then
               tune_rtl_tcp "$${PHZ}" >/dev/null 2>&1 && echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)" || echo "[autotuner] tune failed"
             fi
           fi
