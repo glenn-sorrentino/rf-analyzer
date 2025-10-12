@@ -12,16 +12,20 @@ services:
     environment:
       OWX_ADMIN_ENABLED: "true"
 
+  # Soapy server on the demo box (webui profile)
   connector:
     build:
       context: .
       dockerfile: Dockerfile.connector
-    profiles: ["device"]
+    profiles: ["webui"]     # run alongside openwebrx on the demo device
     container_name: owrx-connector
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    network_mode: "host"
+    network_mode: "service:openwebrx"   # make 127.0.0.1 shared with OpenWebRX
+    depends_on:
+      openwebrx:
+        condition: service_started
     restart: unless-stopped
     environment:
       SOAPY_SDR_REMOTE_DISABLE_DNSSD: "1"
@@ -43,21 +47,51 @@ services:
         command -v "$$BIN"; "$$BIN" --version || true
         soapy-sdr-util --info || true
 
-        echo "[connector] trying to bind on 0.0.0.0:55132 without mDNS"
-        # Try multiple flag styles (different distros use different parsers)
-        ( exec "$$BIN" --bind=0.0.0.0:55132 --no-dnssd ) || \
-        ( exec "$$BIN" --bind=tcp://0.0.0.0:55132 --no-dnssd ) || \
-        ( exec "$$BIN" --bind 0.0.0.0 --port 55132 --disableMDNS ) || \
-        ( exec "$$BIN" -H 0.0.0.0 -p 55132 --no-dnssd )
+        echo "[connector] binding Soapy server on 127.0.0.1:55132 (no mDNS)"
+        ( exec "$$BIN" --bind=127.0.0.1:55132 --no-dnssd ) || \
+        ( exec "$$BIN" --bind=tcp://127.0.0.1:55132 --no-dnssd ) || \
+        ( exec "$$BIN" --bind 127.0.0.1 --port 55132 --disableMDNS ) || \
+        ( exec "$$BIN" -H 127.0.0.1 -p 55132 --no-dnssd )
 
         echo "[connector] all start attempts failed"
         sleep 3600
     healthcheck:
       test:
         - CMD-SHELL
-        - >
-          ss -ltnp | tee /tmp/sslist |
-          (grep -q ':55132 ' && exit 0 || (echo '[hc] not listening yet'; cat /tmp/sslist; exit 1))
+        - ss -ltnp | grep -q ':55132 '
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 25s
+
+  # Optional: Soapy server on the *other* device too
+  connector-device:
+    build:
+      context: .
+      dockerfile: Dockerfile.connector
+    profiles: ["device"]    # run this on the verb device if desired
+    container_name: owrx-connector-device
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    network_mode: "host"
+    restart: unless-stopped
+    environment:
+      SOAPY_SDR_REMOTE_DISABLE_DNSSD: "1"
+      SOAPY_REMOTE_DISABLE_MDNS: "1"
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        BIN="$$(command -v SoapySDRServer || true)"
+        [ -z "$$BIN" ] && BIN="$$(command -v soapy_remote_server || true)"
+        [ -z "$$BIN" ] && { echo "[connector-device] no Soapy server"; sleep 3600; }
+        exec "$$BIN" --bind=0.0.0.0:55132 --no-dnssd
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ss -ltnp | grep -q ':55132 '
       interval: 5s
       timeout: 3s
       retries: 40
@@ -71,44 +105,94 @@ services:
     depends_on:
       openwebrx:
         condition: service_started
+      connector:
+        condition: service_healthy
     network_mode: "service:openwebrx"
     restart: unless-stopped
     environment:
-      SWEEP_URL: "http://100.122.45.119:8088/peak"
+      SWEEP_URL: "http://100.122.45.119:8088/peak"  # publisher on the other box
       MIN_DB: "-70"
     command:
       - bash
       - -lc
       - |
         set -euo pipefail
-        echo "[autotuner] sweep via HTTP; tuning via rtl_tcp binary on 127.0.0.1:50221"
+        echo "[autotuner] sweep via HTTP; tuning via Soapy control socket (fallback rtl_tcp)"
+
+        discover_soapy_ctrl_port() {
+          # OpenWebRX prints "control socket started on <port>" and binds on 127.0.0.1
+          # Probe likely high ports (30k-60k) and return first that stays open.
+          ss -lntH | awk '{print $$4}' | awk -F: '/127\.0\.0\.1/ {print $$NF}' \
+            | awk '($$1 >= 30000 && $$1 <= 60000) && $$1 != 8073 && $$1 != 50221 && $$1 != 55132 {print $$1}' \
+            | head -n1
+        }
+
+        tune_soapy() {
+          local hz="$$1" port="$$2"
+          # Try common plaintext/JSON command variants; succeed on first that doesn't error.
+          python3 - <<'PY' "$$hz" "$$port" || return 1
+            import socket, sys, json, time
+            hz=int(sys.argv[1]); port=int(sys.argv[2])
+            cand = [
+                (f"FREQ {hz}\n").encode(),
+                (f"SET FREQ {hz}\n").encode(),
+                (f"set_freq {hz}\n").encode(),
+                (json.dumps({"cmd":"set_freq","hz":hz})+"\n").encode(),
+            ]
+            ok=False
+            for payload in cand:
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=1.5) as s:
+                        s.sendall(payload)
+                        # small grace; some sockets reply, some just close
+                        s.settimeout(0.5)
+                        try:
+                            _ = s.recv(64)
+                        except Exception:
+                            pass
+                    ok=True
+                    break
+                except Exception:
+                    time.sleep(0.1)
+            if not ok: raise SystemExit(1)
+            print("ok")
+            PY
+        }
 
         tune_rtl_tcp() {
           local hz="$$1"
-          python3 -c 'import sys,struct,socket; hz=int(sys.argv[1]); s=socket.create_connection(("127.0.0.1",50221),timeout=2); s.sendall(struct.pack("<BI",1,hz)); s.close(); print("ok")' "$$hz" || return 1
+          python3 -c 'import sys,struct,socket; hz=int(sys.argv[1]); s=socket.create_connection(("127.0.0.1",50221),timeout=1.5); s.sendall(struct.pack("<BI",1,hz)); s.close(); print("ok")' "$$hz" || return 1
         }
 
-        # wait for OpenWebRX UI
-        for i in $$(seq 1 90); do
-          curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1
-        done
+        # Wait for OpenWebRX UI
+        for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
 
-        # wait for rtl_tcp listener (enable rtl_tcp in the OWRX UI)
-        for i in $$(seq 1 180); do
-          ss -lnt | grep -q ':50221 ' && break || sleep 1
-        done
-        echo "[autotuner] rtl_tcp control ready on 127.0.0.1:50221"
+        # Wait for Soapy server (connector) to be up
+        for i in $$(seq 1 90); do ss -lnt | grep -q ':55132 ' && break || sleep 1; done || true
+        ss -lnt | grep -q ':55132 ' && echo "[autotuner] Soapy server detected on 127.0.0.1:55132" || echo "[autotuner] WARN: Soapy server not detected"
 
+        # Main loop
         while :; do
           resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
           PHZ="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .peak_hz // empty')"
           PDB="$$(printf "%s" "$$resp" | jq -r 'select(.ok==true) | .max_db  // empty')"
+
           if [ -n "$$PHZ" ] && [ -n "$$PDB" ]; then
             ok="$$(echo "$$PDB > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
             if [ "$$ok" -eq 1 ]; then
-              tune_rtl_tcp "$$PHZ" >/dev/null 2>&1 && \
-                echo "[autotuner] tuned -> $$PHZ Hz (peak $$PDB dB)" || \
-                echo "[autotuner] tune failed"
+              # Prefer Soapy control socket if present; else fall back to rtl_tcp
+              CTRL="$$(discover_soapy_ctrl_port || true)"
+              if [ -n "$$CTRL" ]; then
+                tune_soapy "$$PHZ" "$$CTRL" >/dev/null 2>&1 && \
+                  echo "[autotuner] soapy tuned -> $$PHZ Hz (peak $$PDB dB) via $$CTRL" || \
+                  echo "[autotuner] soapy tune failed on $$CTRL"
+              elif ss -lnt | grep -q ':50221 '; then
+                tune_rtl_tcp "$$PHZ" >/dev/null 2>&1 && \
+                  echo "[autotuner] rtl_tcp tuned -> $$PHZ Hz (peak $$PDB dB)" || \
+                  echo "[autotuner] rtl_tcp tune failed"
+              else
+                echo "[autotuner] no control socket found (soapy or rtl_tcp)"
+              fi
             fi
           fi
           sleep 60
