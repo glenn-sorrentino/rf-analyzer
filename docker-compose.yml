@@ -137,16 +137,16 @@ services:
         set -e
         pip install --no-cache-dir flask==3.0.3
         python - <<'PY'
-from flask import Flask, jsonify
-from pathlib import Path
-import csv, time
+          from flask import Flask, jsonify
+          from pathlib import Path
+          import csv, time
 
-app = Flask(__name__)
-SWEEP_DIR = Path("/mnt/iqdata/sweeps")
+          app = Flask(__name__)
+          SWEEP_DIR = Path("/mnt/iqdata/sweeps")
 
-def latest_lite():
-    files = sorted(SWEEP_DIR.glob("sweep_*_lite.csv"))
-    return files[-1] if files else None
+          def latest_lite():
+              files = sorted(SWEEP_DIR.glob("sweep_*_lite.csv"))
+              return files[-1] if files else None
 
 @app.get("/peak")
 def peak():
