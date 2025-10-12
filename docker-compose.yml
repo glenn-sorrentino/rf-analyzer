@@ -57,7 +57,9 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - ss -ltnp | tee /tmp/sslist | (grep -q ':55132 ' && exit 0 || (echo '[hc] not listening yet'; cat /tmp/sslist; exit 1))
+        - >
+          ss -ltnp | tee /tmp/sslist |
+          (grep -q ':55132 ' && exit 0 || (echo '[hc] not listening yet'; cat /tmp/sslist; exit 1))
       interval: 5s
       timeout: 3s
       retries: 40
@@ -86,13 +88,13 @@ services:
         tune_rtl_tcp() {
           local hz="$1"
           python3 - <<'PY' "$hz" || return 1
-import socket, struct, sys
-hz = int(sys.argv[1])
-payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
-with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-    s.sendall(payload)
-print("ok")
-PY
+          import socket, struct, sys
+          hz = int(sys.argv[1])
+          payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
+          with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
+              s.sendall(payload)
+          print("ok")
+          PY
         }
 
         # wait for OpenWebRX UI
