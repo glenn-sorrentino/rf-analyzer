@@ -90,7 +90,7 @@ services:
             with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
                 s.sendall(payload)
             print("ok")
-            PY
+          PY
         }
 
         # wait for OpenWebRX UI
