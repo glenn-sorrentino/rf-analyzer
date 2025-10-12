@@ -23,7 +23,7 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
-    network_mode: "host"             # runs on the verb device (listener box)
+    network_mode: "host"
     restart: unless-stopped
     environment:
       SOAPY_SDR_REMOTE_DISABLE_DNSSD: "1"
@@ -34,28 +34,30 @@ services:
       - |
         set -euo pipefail
         set -x
-        BIN="$$(command -v SoapySDRServer || true)"
-        [ -z "$$BIN" ] && BIN="$$(command -v soapy_remote_server || true)"
-        if [ -z "$$BIN" ]; then
+        BIN="$(command -v SoapySDRServer || true)"
+        [ -z "$BIN" ] && BIN="$(command -v soapy_remote_server || true)"
+        if [ -z "$BIN" ]; then
           echo "[connector] ERROR: Soapy SDR server binary not found in image."
           sleep 3600
         fi
 
-        echo "[connector] Using $$BIN; versions:"
-        command -v $$BIN; $$BIN --version || true
+        echo "[connector] Using $BIN; versions:"
+        command -v "$BIN"; "$BIN" --version || true
         soapy-sdr-util --info || true
 
         echo "[connector] trying to bind on 0.0.0.0:55132 without mDNS"
         # Try multiple flag styles (different distros use different parsers)
-        ( exec "$$BIN" --bind=0.0.0.0:55132 --no-dnssd ) || \
-        ( exec "$$BIN" --bind=tcp://0.0.0.0:55132 --no-dnssd ) || \
-        ( exec "$$BIN" --bind 0.0.0.0 --port 55132 --disableMDNS ) || \
-        ( exec "$$BIN" -H 0.0.0.0 -p 55132 --no-dnssd )
+        ( exec "$BIN" --bind=0.0.0.0:55132 --no-dnssd ) || \
+        ( exec "$BIN" --bind=tcp://0.0.0.0:55132 --no-dnssd ) || \
+        ( exec "$BIN" --bind 0.0.0.0 --port 55132 --disableMDNS ) || \
+        ( exec "$BIN" -H 0.0.0.0 -p 55132 --no-dnssd )
 
         echo "[connector] all start attempts failed"
         sleep 3600
     healthcheck:
-      test: ["CMD-SHELL","ss -ltnp | tee /tmp/sslist | (grep -q ':55132 ' && exit 0 || (echo '[hc] not listening yet'; cat /tmp/sslist; exit 1))"]
+      test:
+        - CMD-SHELL
+        - ss -ltnp | tee /tmp/sslist | (grep -q ':55132 ' && exit 0 || (echo '[hc] not listening yet'; cat /tmp/sslist; exit 1))
       interval: 5s
       timeout: 3s
       retries: 40
@@ -69,10 +71,10 @@ services:
     depends_on:
       openwebrx:
         condition: service_started
-    network_mode: "service:openwebrx"   # share 127.0.0.1 with OpenWebRX on the demo box
+    network_mode: "service:openwebrx"
     restart: unless-stopped
     environment:
-      SWEEP_URL: "http://100.122.45.119:8088/peak"   # verb device IP (publisher)
+      SWEEP_URL: "http://100.122.45.119:8088/peak"
       MIN_DB: "-70"
     command:
       - bash
@@ -82,33 +84,37 @@ services:
         echo "[autotuner] sweep via HTTP; tuning via rtl_tcp binary on 127.0.0.1:50221"
 
         tune_rtl_tcp() {
-          local hz="$$1"
-          python3 - <<'PY' "$$hz" || return 1
-            import socket, struct, sys
-            hz = int(sys.argv[1])
-            payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
-            with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-                s.sendall(payload)
-            print("ok")
-          PY
+          local hz="$1"
+          python3 - <<'PY' "$hz" || return 1
+import socket, struct, sys
+hz = int(sys.argv[1])
+payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
+with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
+    s.sendall(payload)
+print("ok")
+PY
         }
 
         # wait for OpenWebRX UI
-        for i in $$(seq 1 90); do curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1; done
+        for i in $(seq 1 90); do
+          curl -fsS http://127.0.0.1:8073 >/dev/null 2>&1 && break || sleep 1
+        done
 
         # wait for rtl_tcp listener (enable rtl_tcp in the OWRX UI)
-        for i in $$(seq 1 180); do ss -lnt | grep -q ':50221 ' && break || sleep 1; done
+        for i in $(seq 1 180); do
+          ss -lnt | grep -q ':50221 ' && break || sleep 1
+        done
         echo "[autotuner] rtl_tcp control ready on 127.0.0.1:50221"
 
         while :; do
-          resp="$$(curl -fsSL "$${SWEEP_URL}" || true)"
-          PHZ="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
-          PDB="$$(printf "%s" "$${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
-          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
-            ok="$$(echo "$${PDB} > $${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
-            if [ "$${ok}" -eq 1 ]; then
-              tune_rtl_tcp "$${PHZ}" >/dev/null 2>&1 && \
-                echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)" || \
+          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
+          PHZ="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
+          PDB="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
+          if [ -n "${PHZ}" ] && [ -n "${PDB}" ]; then
+            ok="$(echo "${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+            if [ "${ok}" -eq 1 ]; then
+              tune_rtl_tcp "${PHZ}" >/dev/null 2>&1 && \
+                echo "[autotuner] tuned -> ${PHZ} Hz (peak ${PDB} dB)" || \
                 echo "[autotuner] tune failed"
             fi
           fi
