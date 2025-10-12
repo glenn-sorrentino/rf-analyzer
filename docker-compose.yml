@@ -1,3 +1,4 @@
+# docker-compose.yml
 services:
   openwebrx:
     image: jketterl/openwebrx-full:latest
@@ -33,15 +34,15 @@ services:
       - -lc
       - |
         set -e
-        BIN="$(command -v SoapySDRServer || true)"
+        BIN="$$(command -v SoapySDRServer || true)"
         [ -z "$BIN" ] && BIN="$(command -v soapy_remote_server || true)"
         if [ -z "$BIN" ]; then
           echo "[connector] ERROR: Soapy SDR server binary not found in image."
           sleep 3600
         fi
-        echo "[connector] starting $BIN without mDNS on 127.0.0.1:55132"
-        exec "$BIN" --bind=tcp://127.0.0.1:55132 --no-dnssd || \
-        exec "$BIN" --bind 127.0.0.1 --port 55132 --disableMDNS
+        echo "[connector] starting $$BIN without mDNS on 127.0.0.1:55132"
+        exec "$$BIN" --bind=tcp://127.0.0.1:55132 --no-dnssd || \
+        exec "$$BIN" --bind 127.0.0.1 --port 55132 --disableMDNS
     healthcheck:
       test: ["CMD-SHELL","ss -ltn | grep -q ':55132 '"]
       interval: 5s
@@ -87,13 +88,13 @@ services:
         echo "[autotuner] rtl_tcp control ready on 127.0.0.1:50221"
 
         while :; do
-          resp="$(curl -fsSL "${SWEEP_URL}" || true)"
+          resp="$(curl -fsSL "$${SWEEP_URL}" || true)"
           PHZ="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .peak_hz // empty')"
           PDB="$(printf "%s" "${resp}" | jq -r 'select(.ok==true) | .max_db  // empty')"
-          if [ -n "${PHZ}" ] && [ -n "${PDB}" ]; then
-            ok="$(echo "${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
+          if [ -n "$${PHZ}" ] && [ -n "$${PDB}" ]; then
+            ok="$(echo "$${PDB} > ${MIN_DB:- -70}" | bc -l 2>/dev/null || echo 0)"
             if [ "${ok}" -eq 1 ]; then
-              tune_rtl_tcp "${PHZ}" >/dev/null 2>&1 && echo "[autotuner] tuned -> ${PHZ} Hz (peak ${PDB} dB)" || echo "[autotuner] tune failed"
+              tune_rtl_tcp "$${PHZ}" >/dev/null 2>&1 && echo "[autotuner] tuned -> $${PHZ} Hz (peak $${PDB} dB)" || echo "[autotuner] tune failed"
             fi
           fi
           sleep 60
