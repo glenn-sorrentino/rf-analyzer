@@ -88,12 +88,12 @@ services:
         tune_rtl_tcp() {
           local hz="$1"
           python3 - <<'PY' "$hz" || return 1
-          import socket, struct, sys
-          hz = int(sys.argv[1])
-          payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
-          with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-              s.sendall(payload)
-          print("ok")
+            import socket, struct, sys
+            hz = int(sys.argv[1])
+            payload = struct.pack("<BI", 0x01, hz)  # rtl_tcp: cmd 0x01 + uint32_le(hz)
+            with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
+                s.sendall(payload)
+            print("ok")
           PY
         }
 
