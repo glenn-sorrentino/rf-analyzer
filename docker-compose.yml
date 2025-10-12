@@ -75,8 +75,10 @@ services:
           python3 - <<'PY' "$hz" || return 1
             import socket, struct, sys
             hz = int(sys.argv[1])
+            # 0x01 = Set frequency (uint32 little endian)
+            payload = struct.pack("<BI", 0x01, hz)
             with socket.create_connection(("127.0.0.1", 50221), timeout=2) as s:
-              s.sendall(b"f" + struct.pack("<I", hz))
+              s.sendall(payload)
             print("ok")
           PY
         }
